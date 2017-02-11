@@ -198,11 +198,27 @@ class GeneralSettingsDialog(SettingsDialog):
 		settingsSizerHelper.addItem(self.startOnLogonScreenCheckBox)
 
 		# Translators: The label for a button in general settings to copy current user settings to system settings (to allow current settings to be used in secure screens such as User Account Control (UAC) dialog).
-		self.copySettingsButton= wx.Button(self, label=_("Use currently saved settings on the logon and other secure screens (requires administrator privileges)"))
-		self.copySettingsButton.Bind(wx.EVT_BUTTON,self.onCopySettings)
+		self.copySettingsToSystemConfigButton= wx.Button(self, label=_("Use currently saved settings on the logon and other secure screens (requires administrator privileges)"))
+		self.copySettingsToSystemConfigButton.Bind(wx.EVT_BUTTON,self.onCopySettingsToSystemConfig)
 		if globalVars.appArgs.secure or not config.canStartOnSecureScreens():
-			self.copySettingsButton.Disable()
-		settingsSizerHelper.addItem(self.copySettingsButton)
+			self.copySettingsToSystemConfigButton.Disable()
+		settingsSizerHelper.addItem(self.copySettingsToSystemConfigButton)
+
+		# Translators: The label for a setting in general settings to set whether to use the system's centralized configuration to use its add-ons, global plugins, drivers, etc.
+		self.useCentralConfigStorageCheckBox = wx.CheckBox(self, label=_("Use the centralized configuration storage"))
+		self.useCentralConfigStorageCheckBox.SetValue(config.conf['general']['useCentralConfigStorage'])
+		self.useCentralConfigStorageCheckBox.Bind(wx.EVT_CHECKBOX,lambda evt: self.copySettingsToCentralConfigButton.Enable(evt.IsChecked()))
+		if globalVars.appArgs.secure or not config.isInstalledCopy():
+			self.useCentralConfigStorageCheckBox.Disable()
+		settingsSizerHelper.addItem(self.useCentralConfigStorageCheckBox)
+
+		# Translators: The label for a button in general settings to copy current user settings to central settings (to allow central add-on, driver and plugin storage).
+		self.copySettingsToCentralConfigButton= wx.Button(self, label=_("Make the current user configuration the central configuration for this machine (requires administrator privileges)"))
+		self.copySettingsToCentralConfigButton.Bind(wx.EVT_BUTTON,self.onCopySettingsToCentralConfig)
+		if globalVars.appArgs.secure or not config.isInstalledCopy():
+			self.copySettingsToCentralConfigButton.Disable()
+		settingsSizerHelper.addItem(self.copySettingsToCentralConfigButton)
+
 		if updateCheck:
 			# Translators: The label of a checkbox in general settings to toggle automatic checking for updated versions of NVDA (if not checked, user must check for updates manually).
 			item=self.autoCheckForUpdatesCheckBox=wx.CheckBox(self,label=_("Automatically check for &updates to NVDA"))
@@ -214,7 +230,7 @@ class GeneralSettingsDialog(SettingsDialog):
 	def postInit(self):
 		self.languageList.SetFocus()
 
-	def onCopySettings(self,evt):
+	def onCopySettingsToSystemConfig(self,evt):
 		for packageType in ('addons','appModules','globalPlugins','brailleDisplayDrivers','synthDrivers'):
 			if len(os.listdir(os.path.join(globalVars.appArgs.configPath,packageType)))>0:
 				if gui.messageBox(
@@ -256,6 +272,47 @@ class GeneralSettingsDialog(SettingsDialog):
 			gui.messageBox(_("Error copying NVDA user settings"),_("Error"),wx.OK|wx.ICON_ERROR,self)
 		else:
 			# Translators: The message displayed when copying configuration to system settings was successful.
+			gui.messageBox(_("Successfully copied NVDA user settings"),_("Success"),wx.OK|wx.ICON_INFORMATION,self)
+
+	def onCopySettingsToCentralConfig(self,evt):
+		if gui.messageBox(
+			# Translators: A message to warn the user when attempting to copy current settings to central storage.
+			_("Do you wish to copy your settings to the central storage folder on this system?"),
+			# Translators: The title of the warning dialog displayed when trying to copy settings for use in secure screens.
+			_("Question"),wx.YES|wx.NO|wx.ICON_QUESTION,self
+		)==wx.NO:
+			return
+		progressDialog = gui.IndeterminateProgressDialog(gui.mainFrame,
+		# Translators: The title of the dialog presented while settings are being copied 
+		_("Copying Settings"),
+		# Translators: The message displayed while settings are being copied to the central configuration (for central storage of add-ons etc) 
+		_("Please wait while settings are copied to the central configuration."))
+		while True:
+			try:
+				gui.ExecAndPump(config.setCentralConfigToCurrentConfig)
+				res=True
+				break
+			except installer.RetriableFailure:
+				log.debugWarning("Error when copying settings to central config",exc_info=True)
+				# Translators: a message dialog asking to retry or cancel when copying settings  fails
+				message=_("Unable to copy a file. Perhaps it is currently being used by another process or you have run out of disc space on the drive you are copying to.")
+				# Translators: the title of a retry cancel dialog when copying settings  fails
+				title=_("Error Copying")
+				if winUser.MessageBox(None,message,title,winUser.MB_RETRYCANCEL)==winUser.IDRETRY:
+					continue
+				res=False
+				break
+			except:
+				log.debugWarning("Error when copying settings to centralconfig",exc_info=True)
+				res=False
+				break
+		progressDialog.done()
+		del progressDialog
+		if not res:
+			# Translators: The message displayed when errors were found while trying to copy current configuration to central settings.
+			gui.messageBox(_("Error copying NVDA user settings"),_("Error"),wx.OK|wx.ICON_ERROR,self)
+		else:
+			# Translators: The message displayed when copying configuration to central settings was successful.
 			gui.messageBox(_("Successfully copied NVDA user settings"),_("Success"),wx.OK|wx.ICON_INFORMATION,self)
 
 	def onOk(self,evt):

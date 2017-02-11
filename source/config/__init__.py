@@ -95,7 +95,7 @@ def getUserDefaultConfigPath(useInstalledPathIfExists=False):
 		return installedUserConfigPath
 	return u'.\\userConfig\\'
 
-def getSystemConfigPath():
+def getCentralConfigPath():
 	if isInstalledCopy():
 		try:
 			return os.path.join(shlobj.SHGetFolderPath(0, shlobj.CSIDL_COMMON_APPDATA), "nvda")
@@ -228,6 +228,8 @@ def setSystemConfigToCurrentConfig():
 			raise RuntimeError("Slave failure")
 
 def _setSystemConfig(fromPath):
+	if not isInstalledCopy():
+		raise RuntimeError("Setting system config unsupported on portable copies")
 	import installer
 	toPath=os.path.join(sys.prefix.decode('mbcs'),'systemConfig')
 	if os.path.isdir(toPath):
@@ -240,6 +242,40 @@ def _setSystemConfig(fromPath):
 		if not os.path.isdir(curDestDir):
 			os.makedirs(curDestDir)
 		for f in files:
+			sourceFilePath=os.path.join(curSourceDir,f)
+			destFilePath=os.path.join(curDestDir,f)
+			installer.tryCopyFile(sourceFilePath,destFilePath)
+
+def setCentralConfigToCurrentConfig():
+	fromPath=os.path.abspath(globalVars.appArgs.configPath)
+	if ctypes.windll.shell32.IsUserAnAdmin():
+		_setCentralConfig(fromPath)
+	else:
+		res=execElevated(SLAVE_FILENAME, (u"setNvdaCentralConfig", fromPath), wait=True)
+		if res==2:
+			raise installer.RetriableFailure
+		elif res!=0:
+			raise RuntimeError("Slave failure")
+
+def _setCentralConfig(fromPath):
+	toPath = getCentralConfigPath()
+	if not isInstalledCopy() or not toPath:
+		raise RuntimeError("Setting central config unsupported on portable copies")
+	import installer
+	if os.path.isdir(toPath):
+		installer.tryRemoveFile(toPath)
+	for curSourceDir,subDirs,files in os.walk(fromPath):
+		if curSourceDir==fromPath:
+			curDestDir=toPath
+			# We only support addons in the central storage
+			subDirs[:]=(d for d in subDirs if d in ('addons'))
+		else:
+			curDestDir=os.path.join(toPath,os.path.relpath(curSourceDir,fromPath))
+		if not os.path.isdir(curDestDir):
+			os.makedirs(curDestDir)
+		for f in files:
+			if curSourceDir==fromPath and not (f in ('gestures.ini','nvda.ini') or f.endswith('.dic')):
+				continue
 			sourceFilePath=os.path.join(curSourceDir,f)
 			destFilePath=os.path.join(curDestDir,f)
 			installer.tryCopyFile(sourceFilePath,destFilePath)

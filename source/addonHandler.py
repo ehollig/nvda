@@ -1,7 +1,7 @@
 # -*- coding: UTF-8 -*-
 #addonHandler.py
 #A part of NonVisual Desktop Access (NVDA)
-#Copyright (C) 2012-2016 Rui Batista, NV Access Limited, Noelia Ruiz Martínez, Joseph Lee
+#Copyright (C) 2012-2017 Rui Batista, NV Access Limited, Noelia Ruiz Martínez, Joseph Lee, Babbage B.V.
 #This file is covered by the GNU General Public License.
 #See the file COPYING for more details.
 
@@ -134,13 +134,19 @@ def terminate():
 
 def _getDefaultAddonPaths():
 	""" Returns paths where addons can be found.
-	For now, only <userConfig\addons is supported.
-	@rtype: list(string)
+	<userConfig>\addons and <centralConfig>\addons are supported.
+	@rtype: list(string or tuple(string)bool))
 	"""
 	addon_paths = []
 	user_addons = os.path.abspath(os.path.join(globalVars.appArgs.configPath, "addons"))
 	if os.path.isdir(user_addons):
 		addon_paths.append(user_addons)
+	if config.conf['general']['useCentralConfigStorage'] and not globalVars.appArgs.secure:
+		central_config = config.getCentralConfigPath()
+		if central_config:
+			central_addons = os.path.abspath(os.path.join(central_config, "addons"))
+			if os.path.isdir(central_addons):
+				addon_paths.append(central_addons)
 	return addon_paths
 
 def _getAvailableAddonsFromPath(path):
@@ -162,6 +168,8 @@ def _getAvailableAddonsFromPath(path):
 				log.debug("Found add-on %s", name)
 				if a.isDisabled:
 					log.debug("Disabling add-on %s", name)
+				if a.inCentralStorage and not a.supportsCentralStorage:
+					log.debug("Disabling central stored add-on %s as it does not support central storage", name)
 				yield a
 			except:
 				log.error("Error loading Addon from path: %s", addon_path, exc_info=True)
@@ -175,6 +183,8 @@ def getAvailableAddons(refresh=False):
 		_availableAddons.clear()
 		generators = [_getAvailableAddonsFromPath(path) for path in _getDefaultAddonPaths()]
 		for addon in itertools.chain(*generators):
+			if addon.name in (a.name for a in _availableAddons.itervalues()):
+				addon.isDuplicate = True
 			_availableAddons[addon.path] = addon
 	return _availableAddons.itervalues()
 
@@ -210,7 +220,7 @@ class Addon(object):
 		"""
 		self.path = os.path.abspath(path)
 		self._extendedPackages = set()
-		self._isLoaded = False
+		self.isDuplicate = False
 		manifest_path = os.path.join(path, MANIFEST_FILENAME)
 		with open(manifest_path) as f:
 			translatedInput = None
@@ -270,6 +280,17 @@ class Addon(object):
 	def name(self):
 		return self.manifest['name']
 
+	@property
+	def inCentralStorage(self):
+		try:
+			return config.getCentralConfigPath() in self.path
+		except TypeError: # conf.getCentralConfigPath returned None
+			return False
+
+	@property
+	def supportsCentralStorage(self):
+		return 	self.manifest.get('supportsCentralStorage',False)
+
 	def addToPackagePath(self, package):
 		""" Adds this L{Addon} extensions to the specific package path if those exist.
 		@param package: the python module representing the package.
@@ -307,7 +328,7 @@ class Addon(object):
 
 	@property
 	def isRunning(self):
-		return not (self.isPendingInstall or self.isDisabled)
+		return not (self.isPendingInstall or self.isDisabled or self.isDuplicate or (self.inCentralStorage and not self.supportsCentralStorage))
 
 	@property
 	def isDisabled(self):

@@ -41,6 +41,9 @@ UIA_SizeOfSetPropertyId=30153
 UIA_LocalizedLandmarkTypePropertyId=30158
 UIA_LandmarkTypePropertyId=30157
 
+#Missing WPF UIA constants
+UIA_DataGridRowControlTypeId=50025
+
 HorizontalTextAlignment_Left=0
 HorizontalTextAlignment_Centered=1
 HorizontalTextAlignment_Right=2

@@ -1,3 +1,9 @@
+#nvda_slave.pyw
+#A part of NonVisual Desktop Access (NVDA)
+#Copyright (C) 2006-2017 NV Access Limited, Babbage B.V.
+#This file is covered by the GNU General Public License.
+#See the file COPYING for more details.
+
 """NVDA slave process
 Performs miscellaneous tasks which need to be performed in a separate process.
 """
@@ -41,6 +47,9 @@ def main():
 		elif action=="setNvdaSystemConfig":
 			import config
 			config._setSystemConfig(args[0].decode('mbcs'))
+		elif action=="setNvdaCentralConfig":
+			import config
+			config._setCentralConfig(args[0].decode('mbcs'))
 		elif action == "config_setStartOnLogonScreen":
 			enable = bool(int(args[0]))
 			import config

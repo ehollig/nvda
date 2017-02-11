@@ -2,7 +2,7 @@
 #A part of NonVisual Desktop Access (NVDA)
 #This file is covered by the GNU General Public License.
 #See the file COPYING for more details.
-#Copyright (C) 2012-2016 NV Access Limited, Beqa Gozalishvili, Joseph Lee, Babbage B.V.
+#Copyright (C) 2012-2017 NV Access Limited, Beqa Gozalishvili, Joseph Lee, Babbage B.V.
 
 import os
 import wx
@@ -180,23 +180,29 @@ class AddonsDialog(wx.Dialog):
 	def getAddonStatus(self,addon):
 		if addon.isPendingInstall:
 			# Translators: The status shown for a newly installed addon before NVDA is restarted.
-			return _("install")
+			status = _("install")
 		elif addon.isPendingRemove:
 			# Translators: The status shown for an addon that has been marked as removed, before NVDA has been restarted.
-			return _("remove")
+			status = _("remove")
 		# Need to do this here, as 'isDisabled' overrides other flags.
 		elif addon.isPendingDisable:
 			# Translators: The status shown for an addon when its disabled.
-			return _("disable")
+			status = _("disable")
 		elif addon.isPendingEnable:
 			# Translators: The status shown for an addon when its enabled.
-			return _("enable")
+			status = _("enable")
+		elif addon.isDuplicate:
+			# Translators: The status shown for an addon when it is superseded by another addon with the same name.
+			status = _("superseded")
 		elif globalVars.appArgs.disableAddons or addon.isDisabled:
 			# Translators: The status shown for an addon when its currently suspended do to addons being disabled.
-			return _("suspended")
+			status = _("suspended")
 		else:
 			# Translators: The status shown for an addon when its currently running in NVDA.
-			return _("running")
+			status = _("running")
+		if addon.inCentralStorage:
+			status += " (%s)" %_("central")
+		return status
 
 	def refreshAddonsList(self,activeIndex=0):
 		self.addonsList.DeleteAllItems()
@@ -230,8 +236,8 @@ class AddonsDialog(wx.Dialog):
 			self.enableDisableButton.SetLabel(_("&Enable add-on") if not self._shouldDisable(addon) else _("&Disable add-on"))
 		self.aboutButton.Enable(addon is not None and not addon.isPendingRemove)
 		self.helpButton.Enable(bool(addon is not None and not addon.isPendingRemove and addon.getDocFilePath()))
-		self.enableDisableButton.Enable(addon is not None and not addon.isPendingRemove)
-		self.removeButton.Enable(addon is not None and not addon.isPendingRemove)
+		self.enableDisableButton.Enable(addon is not None and not addon.isPendingRemove and not addon.isDuplicate and not addon.supportsCentralStorage)
+		self.removeButton.Enable(addon is not None and not addon.isPendingRemove and not addon.inCentralStorage)
 
 	def onClose(self,evt):
 		self.Destroy()
