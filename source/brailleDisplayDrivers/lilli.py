@@ -76,14 +76,14 @@ class BrailleDisplayDriver(braille.BrailleDisplayDriver):
 			except:
 				pass
 			if not key: break
-			if (key <= 64) or ((key >= 257) and (key <= 296)): 
+			if (key <= 0x40) or ((key >= 0x101) and (key <= 0x128)): 
 				self._onKeyPress(key)
 
 	def _onKeyPress(self, key):
 		try:
-			if (key >= 257) and (key <= 296):                                 
-				inputCore.manager.executeGesture(InputGesture(LILLI_KEYS[65],key-256))
-			elif (key <= 64):
+			if (key >= 0x101) and (key <= 0x128):                                 
+				inputCore.manager.executeGesture(InputGesture(LILLI_KEYS[65],key-0x101))
+			elif (key <= 0x40):
 				inputCore.manager.executeGesture(InputGesture(LILLI_KEYS[key],0))
 		except inputCore.NoInputGestureAction:
 			pass
