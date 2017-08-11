@@ -12,7 +12,7 @@ import sys
 from collections import OrderedDict
 import ctypes
 import _winreg
-from synthDriverHandler import SynthDriver, VoiceInfo
+from synthDriverHandler import SynthDriver, VoiceInfo, synthIndexReached, synthDoneSpeaking
 from logHandler import log
 import config
 import nvwave
@@ -162,6 +162,7 @@ class SynthDriver(SynthDriver):
 			self._dll.ocSpeech_speak(self._handle, item)
 			return
 		self._player.idle()
+		synthDoneSpeaking.notify(synth=self)
 		log.debug("Queue empty, done processing")
 		self._isProcessing = False
 
@@ -198,8 +199,8 @@ class SynthDriver(SynthDriver):
 			self._player.feed(data[prevPos:pos])
 			# _player.feed blocks until the previous chunk of audio is complete, not the chunk we just pushed.
 			# Therefore, indicate that we've reached the previous marker.
-			if prevMarker:
-				self.lastIndex = prevMarker
+			if prevMarker is not None:
+				synthIndexReached.notify(synth=self, index=prevMarker)
 			prevMarker = int(name)
 			prevPos = pos
 		if self._wasCancelled:
@@ -207,7 +208,7 @@ class SynthDriver(SynthDriver):
 		else:
 			self._player.feed(data[prevPos:])
 			if prevMarker:
-				self.lastIndex = prevMarker
+				synthIndexReached.notify(synth=self, index=prevMarker)
 			log.debug("Done pushing audio")
 		self._processQueue()
 

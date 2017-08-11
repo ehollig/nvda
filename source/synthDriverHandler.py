@@ -15,6 +15,7 @@ from logHandler import log
 from  synthSettingsRing import SynthSettingsRing
 import languageHandler
 import speechDictHandler
+import extensionPoints
 import synthDrivers
 
 _curSynth=None
@@ -546,3 +547,12 @@ class LanguageInfo(StringParameterInfo):
 		name=languageHandler.getLanguageDescription(ID)
 		super(LanguageInfo,self).__init__(ID,name)
 
+#: Notifies when a synthesizer reaches an index during speech.
+#: Handlers are called with these keyword arguments:
+#: synth: The L{SynthDriver} which reached the index.
+#: index: The number of the index which has just been reached.
+synthIndexReached = extensionPoints.Action()
+#: Notifies when a synthesizer finishes speaking.
+#: Handlers are called with one keyword argument:
+#: synth: The L{SynthDriver} which reached the index.
+synthDoneSpeaking = extensionPoints.Action()

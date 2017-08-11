@@ -84,7 +84,7 @@ def getLastSpeechIndex():
 @returns: the last index encountered
 @rtype: int
 """
-	return getSynth().lastIndex
+	return manager.lastFakeIndex
 
 def cancelSpeech():
 	"""Interupts the synthesizer from currently speaking"""
@@ -102,7 +102,7 @@ def cancelSpeech():
 		return
 	elif speechMode==speechMode_beeps:
 		return
-	getSynth().cancel()
+	manager.cancel()
 	beenCanceled=True
 	isPaused=False
 
@@ -146,38 +146,68 @@ def spellTextInfo(info,useCharacterDescriptions=False):
 
 _speakSpellingGenerator=None
 
-def speakSpelling(text,locale=None,useCharacterDescriptions=False):
-	global beenCanceled, _speakSpellingGenerator
-	import speechViewer
-	if speechViewer.isActive:
-		speechViewer.appendText(text)
-	if speechMode==speechMode_off:
-		return
-	elif speechMode==speechMode_beeps:
-		tones.beep(config.conf["speech"]["beepSpeechModePitch"],speechMode_beeps_ms)
-		return
-	if isPaused:
-		cancelSpeech()
-	beenCanceled=False
+def speakSpelling(text, locale=None, useCharacterDescriptions=False):
+	seq = list(getSpeechForSpelling(text, locale=locale, useCharacterDescriptions=useCharacterDescriptions))
+	speak(seq)
+
+def getSpeechForSpelling(text, locale=None, useCharacterDescriptions=False):
 	defaultLanguage=getCurrentLanguage()
 	if not locale or (not config.conf['speech']['autoDialectSwitching'] and locale.split('_')[0]==defaultLanguage.split('_')[0]):
 		locale=defaultLanguage
 
 	if not text:
 		# Translators: This is spoken when NVDA moves to an empty line.
-		return getSynth().speak((_("blank"),))
+		yield _("blank")
+		return
 	if not text.isspace():
 		text=text.rstrip()
-	if _speakSpellingGenerator and _speakSpellingGenerator.gi_frame:
-		_speakSpellingGenerator.send((text,locale,useCharacterDescriptions))
-	else:
-		_speakSpellingGenerator=_speakSpellingGen(text,locale,useCharacterDescriptions)
-		try:
-			# Speak the first character before this function returns.
-			next(_speakSpellingGenerator)
-		except StopIteration:
-			return
-		queueHandler.registerGeneratorObject(_speakSpellingGenerator)
+
+	synth = getSynth()
+	synthConfig=config.conf["speech"][synth.name]
+	charMode = False
+	textLength=len(text)
+	count = 0
+	localeHasConjuncts = True if locale.split('_',1)[0] in LANGS_WITH_CONJUNCT_CHARS else False
+	charDescList = getCharDescListFromText(text,locale) if localeHasConjuncts else text
+	for item in charDescList:
+		if localeHasConjuncts:
+			# item is a tuple containing character and its description
+			char = item[0]
+			charDesc = item[1]
+		else:
+			# item is just a character.
+			char = item
+			if useCharacterDescriptions:
+				charDesc=characterProcessing.getCharacterDescription(locale,char.lower())
+		uppercase=char.isupper()
+		if useCharacterDescriptions and charDesc:
+			char=charDesc[0] if textLength>1 else u"\u3001".join(charDesc)
+		else:
+			char=characterProcessing.processSpeechSymbol(locale,char)
+		if uppercase and synthConfig["sayCapForCapitals"]:
+			# Translators: cap will be spoken before the given letter when it is capitalized.
+			char=_("cap %s")%char
+		if uppercase and synth.isSupported("pitch") and synthConfig["capPitchChange"]:
+			oldPitch = synthConfig["pitch"]
+			newPitch = oldPitch + synthConfig["capPitchChange"]
+			newPitch = max(0, min(100, newPitch))
+			multiplier = newPitch / oldPitch
+			yield PitchCommand(multiplier=multiplier)
+		if config.conf['speech']['autoLanguageSwitching']:
+			yield LangChangeCommand(locale)
+		if len(char) == 1 and synthConfig["useSpellingFunctionality"]:
+			if not charMode:
+				yield CharacterModeCommand(True)
+				charMode = True
+		elif charMode:
+			yield CharacterModeCommand(False)
+			charMode = False
+		if uppercase and  synthConfig["beepForCapitals"]:
+			yield BeepCommand(2000, 50)
+		yield char
+		if uppercase and synth.isSupported("pitch") and synthConfig["capPitchChange"]:
+			yield PitchCommand(multiplier=1)
+		yield EndUtteranceCommand()
 
 def getCharDescListFromText(text,locale):
 	"""This method prepares a list, which contains character and its description for all characters the text is made up of, by checking the presence of character descriptions in characterDescriptions.dic of that locale for all possible combination of consecutive characters in the text.
@@ -201,58 +231,6 @@ def getCharDescListFromText(text,locale):
 		else:
 			i = i - 1
 	return charDescList
-
-def _speakSpellingGen(text,locale,useCharacterDescriptions):
-	synth=getSynth()
-	synthConfig=config.conf["speech"][synth.name]
-	buf=[(text,locale,useCharacterDescriptions)]
-	for text,locale,useCharacterDescriptions in buf:
-		textLength=len(text)
-		count = 0
-		localeHasConjuncts = True if locale.split('_',1)[0] in LANGS_WITH_CONJUNCT_CHARS else False
-		charDescList = getCharDescListFromText(text,locale) if localeHasConjuncts else text
-		for item in charDescList:
-			if localeHasConjuncts:
-				# item is a tuple containing character and its description
-				char = item[0]
-				charDesc = item[1]
-			else:
-				# item is just a character.
-				char = item
-				if useCharacterDescriptions:
-					charDesc=characterProcessing.getCharacterDescription(locale,char.lower())
-			uppercase=char.isupper()
-			if useCharacterDescriptions and charDesc:
-				#Consider changing to multiple synth speech calls
-				char=charDesc[0] if textLength>1 else u"\u3001".join(charDesc)
-			else:
-				char=characterProcessing.processSpeechSymbol(locale,char)
-			if uppercase and synthConfig["sayCapForCapitals"]:
-				# Translators: cap will be spoken before the given letter when it is capitalized.
-				char=_("cap %s")%char
-			if uppercase and synth.isSupported("pitch") and synthConfig["capPitchChange"]:
-				oldPitch=synthConfig["pitch"]
-				synth.pitch=max(0,min(oldPitch+synthConfig["capPitchChange"],100))
-			count = len(char)
-			index=count+1
-			log.io("Speaking character %r"%char)
-			speechSequence=[LangChangeCommand(locale)] if config.conf['speech']['autoLanguageSwitching'] else []
-			if len(char) == 1 and synthConfig["useSpellingFunctionality"]:
-				speechSequence.append(CharacterModeCommand(True))
-			if index is not None:
-				speechSequence.append(IndexCommand(index))
-			speechSequence.append(char)
-			synth.speak(speechSequence)
-			if uppercase and synth.isSupported("pitch") and synthConfig["capPitchChange"]:
-				synth.pitch=oldPitch
-			while textLength>1 and (isPaused or getLastSpeechIndex()!=index):
-				for x in xrange(2):
-					args=yield
-					if args: buf.append(args)
-			if uppercase and  synthConfig["beepForCapitals"]:
-				tones.beep(2000,50)
-		args=yield
-		if args: buf.append(args)
 
 def speakObjectProperties(obj,reason=controlTypes.REASON_QUERY,index=None,**allowedProperties):
 	#Fetch the values for all wanted properties
@@ -543,7 +521,7 @@ def speak(speechSequence,symbolLevel=None):
 			speechSequence[index]=processText(curLanguage,item,symbolLevel)
 			if not inCharacterMode:
 				speechSequence[index]+=CHUNK_SEPARATOR
-	getSynth().speak(speechSequence)
+	manager.speak(speechSequence)
 
 def speakSelectionMessage(message,text):
 	if len(text) < 512:
@@ -1773,6 +1751,9 @@ class BreakCommand(SpeechCommand):
 	def __repr__(self):
 		return "BreakCommand(time=%d)" % self.time
 
+class EndUtteranceCommand(SpeechCommand):
+	pass
+
 class PitchCommand(SpeechCommand):
 	"""Change the pitch of the voice.
 	"""
@@ -1841,3 +1822,139 @@ class PhonemeCommand(SpeechCommand):
 		if self.text:
 			out += ", text=%r" % self.text
 		return out + ")"
+
+class BaseCallbackCommand(SpeechCommand):
+
+	def run(self):
+		pass
+
+class CallbackCommand(BaseCallbackCommand):
+
+	def __init__(self, callback):
+		self.run = callback
+
+class BeepCommand(BaseCallbackCommand):
+
+	def __init__(self, hz, length, left=50, right=50):
+		self.hz = hz
+		self.length = length
+		self.left = left
+		self.right = right
+
+	def run(self):
+		import tones
+		tones.beep(self.hz, self.length, left=self.left, right=self.right)
+
+class WaveFileCommand(BaseCallbackCommand):
+
+	def __init__(self, fileName):
+		self.fileName = fileName
+
+	def run(self):
+		import nvwave
+		nvwave.playWaveFile(self.fileName, async=False)
+
+class SpeechManager(object):
+
+	def __init__(self):
+		self._reset()
+		synthDriverHandler.synthIndexReached.register(self._onSynthIndexReached)
+		synthDriverHandler.synthDoneSpeaking.register(self._onSynthDoneSpeaking)
+
+	def _reset(self):
+		self._speechSequences = []
+		self._indexCounter = itertools.count(1)
+		self._indexesToCallbacks = {}
+		self.lastFakeIndex = None
+
+	def speak(self, speechSequence):
+		push = not self._speechSequences
+		self._queueSpeechSequence(speechSequence)
+		if push:
+			self._pushNextSpeech()
+
+	def _queueSpeechSequence(self, inSeq):
+		outSeq = []
+		for command in inSeq:
+			splitSeq = False
+			if isinstance(command, IndexCommand):
+				# Backwards compatibility. We want to control index numbering,
+				# but some callers may still pass IndexCommands.
+				# We want the old speech.getLastSpeechIndex() API to return this fake index.
+				command = CallbackCommand(self._makeFakeIndexCommand(command.index))
+			if isinstance(command, BaseCallbackCommand):
+				# When the synth reaches this point, we want to call the callback.
+				speechIndex = next(self._indexCounter)
+				outSeq.append(IndexCommand(speechIndex))
+				self._indexesToCallbacks[speechIndex] = command
+				splitSeq = True
+			elif isinstance(command, EndUtteranceCommand):
+				# Add an index so we know when we've reached the end of this utterance.
+				speechIndex = next(self._indexCounter)
+				outSeq.append(IndexCommand(speechIndex))
+				outSeq.append(command)
+				splitSeq = True
+			else:
+				outSeq.append(command)
+			if splitSeq:
+				self._speechSequences.append(outSeq)
+				outSeq = []
+		# Add the final output sequence.
+		if outSeq:
+			# Add an index so we know when we've reached the end of this utterance.
+			speechIndex = next(self._indexCounter)
+			outSeq.append(IndexCommand(speechIndex))
+			outSeq.append(EndUtteranceCommand())
+			self._speechSequences.append(outSeq)
+
+	def _pushNextSpeech(self):
+		seq = self._buildNextUtterance()
+		getSynth().speak(seq)
+
+	def _buildNextUtterance(self):
+		utterance = []
+		for seq in self._speechSequences:
+			if isinstance(seq[-1], EndUtteranceCommand):
+				# The utterance ends here.
+				utterance.extend(seq[:-1])
+				break
+			utterance.extend(seq)
+		return utterance
+
+	def _onSynthIndexReached(self, synth=None, index=None):
+		if synth != getSynth():
+			return
+		for seqIndex, seq in enumerate(self._speechSequences):
+			lastCommand = seq[-1]
+			if isinstance(lastCommand, EndUtteranceCommand):
+				endOfUtterance = True
+				lastCommand = seq[-2]
+			else:
+				endOfUtterance = False
+			if isinstance(lastCommand, IndexCommand) and lastCommand.index >= index:
+				break
+		else:
+			log.error("Unknown index: %d" % index)
+			return
+		# We've reached this index, so we're done with the associated speech.
+		del self._speechSequences[:seqIndex + 1]
+		callbackCommand = self._indexesToCallbacks.get(index)
+		if callbackCommand:
+			queueHandler.queueFunction(queueHandler.eventQueue, callbackCommand.run)
+		if endOfUtterance:
+			queueHandler.queueFunction(queueHandler.eventQueue, self._pushNextSpeech)
+
+	def _onSynthDoneSpeaking(self, synth=None):
+		if synth != getSynth():
+			return
+
+	def _makeFakeIndexCommand(self, index):
+		def run():
+			self.lastFakeIndex = index
+		return run
+
+	def cancel(self):
+		getSynth().cancel()
+		self._reset()
+
+manager = SpeechManager()

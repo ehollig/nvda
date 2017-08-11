@@ -1,7 +1,7 @@
 # -*- coding: UTF-8 -*-
 #synthDrivers/espeak.py
 #A part of NonVisual Desktop Access (NVDA)
-#Copyright (C) 2007-2015 NV Access Limited, Peter Vágner, Aleksey Sadovoy
+#Copyright (C) 2007-2017 NV Access Limited, Peter Vágner, Aleksey Sadovoy
 #This file is covered by the GNU General Public License.
 #See the file COPYING for more details.
 
@@ -11,7 +11,7 @@ import _espeak
 import Queue
 import threading
 import languageHandler
-from synthDriverHandler import SynthDriver,VoiceInfo,BooleanSynthSetting
+from synthDriverHandler import SynthDriver, VoiceInfo, BooleanSynthSetting, synthIndexReached, synthDoneSpeaking
 import speech
 from logHandler import log
 
@@ -36,7 +36,7 @@ class SynthDriver(SynthDriver):
 		return True
 
 	def __init__(self):
-		_espeak.initialize()
+		_espeak.initialize(self._onIndexReached)
 		log.info("Using eSpeak NG version %s" % _espeak.info())
 		lang=languageHandler.getLanguage()
 		_espeak.setVoiceByLanguage(lang)
@@ -222,8 +222,11 @@ class SynthDriver(SynthDriver):
 			raise
 		self._language=super(SynthDriver,self).language
 
-	def _get_lastIndex(self):
-		return _espeak.lastIndex
+	def _onIndexReached(self, index):
+		if index is not None:
+			synthIndexReached.notify(synth=self, index=index)
+		else:
+			synthDoneSpeaking.notify(synth=self)
 
 	def terminate(self):
 		_espeak.terminate()

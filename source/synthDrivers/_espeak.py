@@ -1,7 +1,7 @@
 # -*- coding: UTF-8 -*-
 #synthDrivers/_espeak.py
 #A part of NonVisual Desktop Access (NVDA)
-#Copyright (C) 2007-2012 NV Access Limited, Peter Vágner
+#Copyright (C) 2007-2017 NV Access Limited, Peter Vágner
 #This file is covered by the GNU General Public License.
 #See the file COPYING for more details.
 
@@ -17,7 +17,7 @@ import os
 import codecs
 
 isSpeaking = False
-lastIndex = None
+onIndexReached = None
 bgThread=None
 bgQueue = None
 player = None
@@ -120,16 +120,17 @@ t_espeak_callback=CFUNCTYPE(c_int,POINTER(c_short),c_int,POINTER(espeak_EVENT))
 @t_espeak_callback
 def callback(wav,numsamples,event):
 	try:
-		global player, isSpeaking, lastIndex
+		global player, isSpeaking
 		if not isSpeaking:
 			return 1
 		for e in event:
 			if e.type==espeakEVENT_MARK:
-				lastIndex=int(e.id.name)
+				onIndexReached(int(e.id.name))
 			elif e.type==espeakEVENT_LIST_TERMINATED:
 				break
 		if not wav:
 			player.idle()
+			onIndexReached(None)
 			isSpeaking = False
 			return 0
 		if numsamples > 0:
@@ -181,7 +182,7 @@ def speak(text):
 	_execWhenDone(_speak, text, mustBeAsync=True)
 
 def stop():
-	global isSpeaking, bgQueue, lastIndex
+	global isSpeaking, bgQueue
 	# Kill all speech from now.
 	# We still want parameter changes to occur, so requeue them.
 	params = []
@@ -198,7 +199,6 @@ def stop():
 		bgQueue.put(item)
 	isSpeaking = False
 	player.stop()
-	lastIndex=None
 
 def pause(switch):
 	global player
@@ -270,8 +270,13 @@ def espeak_errcheck(res, func, args):
 		raise RuntimeError("%s: code %d" % (func.__name__, res))
 	return res
 
-def initialize():
-	global espeakDLL, bgThread, bgQueue, player
+def initialize(indexCallback=None):
+	"""
+	@param indexCallback: A function which is called when eSpeak reaches an index.
+		It is called with one argument:
+		the number of the index or C{None} when speech stops.
+	"""
+	global espeakDLL, bgThread, bgQueue, player, onIndexReached
 	espeakDLL=cdll.LoadLibrary(r"synthDrivers\espeak.dll")
 	espeakDLL.espeak_Info.restype=c_char_p
 	espeakDLL.espeak_Synth.errcheck=espeak_errcheck
@@ -291,9 +296,10 @@ def initialize():
 	bgQueue = Queue.Queue()
 	bgThread=BgThread()
 	bgThread.start()
+	onIndexReached = indexCallback
 
 def terminate():
-	global bgThread, bgQueue, player, espeakDLL 
+	global bgThread, bgQueue, player, espeakDLL , onIndexReached
 	stop()
 	bgQueue.put((None, None, None))
 	bgThread.join()
@@ -303,6 +309,7 @@ def terminate():
 	player.close()
 	player=None
 	espeakDLL=None
+	onIndexReached = None
 
 def info():
 	return espeakDLL.espeak_Info()
