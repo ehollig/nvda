@@ -1862,12 +1862,19 @@ class SpeechManager(object):
 		synthDriverHandler.synthDoneSpeaking.register(self._onSynthDoneSpeaking)
 
 	def _reset(self):
+		#: The pending, processed speech sequences to be spoken.
+		#: These are split at indexes,
+		#: so a single utterance might be split over multiple sequences.
 		self._speechSequences = []
+		#: A counter for indexes sent to the synthesizer for callbacks, etc.
 		self._indexCounter = itertools.count(1)
+		#: Maps indexes to BaseCallbackCommands.
 		self._indexesToCallbacks = {}
+		#: Used for backwards compatibility when the input contains an IndexCommand.
 		self.lastFakeIndex = None
 
 	def speak(self, speechSequence):
+		# If there was nothing queued already, we need to push the first speech.
 		push = not self._speechSequences
 		self._queueSpeechSequence(speechSequence)
 		if push:
@@ -1887,6 +1894,7 @@ class SpeechManager(object):
 				speechIndex = next(self._indexCounter)
 				outSeq.append(IndexCommand(speechIndex))
 				self._indexesToCallbacks[speechIndex] = command
+				# We split at indexes so we easily know what has completed speaking.
 				splitSeq = True
 			elif isinstance(command, EndUtteranceCommand):
 				# Add an index so we know when we've reached the end of this utterance.
@@ -1912,6 +1920,9 @@ class SpeechManager(object):
 		getSynth().speak(seq)
 
 	def _buildNextUtterance(self):
+		"""Since an utterance might be split over several sequences,
+		build a complete utterance to pass to the synth.
+		"""
 		utterance = []
 		for seq in self._speechSequences:
 			if isinstance(seq[-1], EndUtteranceCommand):
@@ -1924,6 +1935,7 @@ class SpeechManager(object):
 	def _onSynthIndexReached(self, synth=None, index=None):
 		if synth != getSynth():
 			return
+		# Find the sequence that just completed speaking.
 		for seqIndex, seq in enumerate(self._speechSequences):
 			lastCommand = seq[-1]
 			if isinstance(lastCommand, EndUtteranceCommand):
@@ -1932,11 +1944,11 @@ class SpeechManager(object):
 			else:
 				endOfUtterance = False
 			if isinstance(lastCommand, IndexCommand) and lastCommand.index >= index:
-				break
+				break # Found it!
 		else:
 			log.error("Unknown index: %d" % index)
 			return
-		# We've reached this index, so we're done with the associated speech.
+		# This sequence is done, so we don't need to track it any more.
 		del self._speechSequences[:seqIndex + 1]
 		callbackCommand = self._indexesToCallbacks.get(index)
 		if callbackCommand:
