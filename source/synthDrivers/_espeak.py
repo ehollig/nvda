@@ -22,6 +22,13 @@ bgThread=None
 bgQueue = None
 player = None
 espeakDLL=None
+#: Keeps count of the number of bytes pushed for the current utterance.
+#: This is necessary because index positions are given as ms since the start of the utterance.
+_numBytesPushed = 0
+#: The index number corresponding to the end of the last chunk of audio pushed.
+_prevIndex = None
+#: Buffers small chunks of audio across calls to the callback.
+_audioBuffer = ""
 
 #Parameter bounds
 minRate=80
@@ -115,29 +122,86 @@ class espeak_VOICE(Structure):
 	def __eq__(self, other):
 		return isinstance(other, type(self)) and addressof(self) == addressof(other)
 
+def _pushAudio(bytes, index):
+	"""Push audio to be played, notifying when indexes are reached.
+	"""
+	global _prevIndex
+	if bytes:
+		player.feed(bytes)
+	else:
+		player.idle()
+	if not isSpeaking:
+		return # Stopped.
+	if _prevIndex is not None:
+		# player.feed blocks until the previous chunk of audio is complete, not the chunk we just pushed.
+		# Therefore, indicate that we've reached the previous index.
+		onIndexReached(_prevIndex)
+	_prevIndex = index
+
+#: The ideal minimum size of each audio chunk  to be played.
+#: This is set for 300 ms.
+#: However, smaller chunks may be sent where indexes occur.
+IDEAL_MIN_PLAY_SIZE = 13200 # 22050 samples per sec * 2 bytes per sample / 1000 ms per sec * 300 ms
+def _pushAudioWithBuffer(bytes=None, index=None):
+	"""Push audio to be played, buffering to an ideal minimum play size.
+	Audio is pushed regardless of the buffer size if there is an index
+	to allow for accurate index notifications.
+	eSpeak already breaks audio up into chunks of a specified length.
+	However, if there is an index near the end of a chunk,
+	this can result in several small chunks being sent, which causes audio glitches.
+	Buffering across eSpeak chunks helps to mitigate this.
+	"""
+	global _audioBuffer
+	if bytes:
+		_audioBuffer += bytes
+		# If there is an index at the end of this chunk,
+		# we must play audio now so we can accurately notify about the index.
+		# Otherwise, only play if we've reached the minimum play size.
+		if index is not None or len(_audioBuffer) > IDEAL_MIN_PLAY_SIZE:
+			_pushAudio(_audioBuffer, index)
+			_audioBuffer = ""
+	else:
+		# This is the end of the utterance.
+		# Push any remaining audio in the buffer.
+		if _audioBuffer:
+			_pushAudio(_audioBuffer, None)
+			_audioBuffer = ""
+		# Make the player.idle call and deal with the final index (if any).
+		_pushAudio(None, None)
+
 t_espeak_callback=CFUNCTYPE(c_int,POINTER(c_short),c_int,POINTER(espeak_EVENT))
 
 @t_espeak_callback
 def callback(wav,numsamples,event):
 	try:
-		global player, isSpeaking
+		global player, isSpeaking, _numBytesPushed
 		if not isSpeaking:
 			return 1
+		indexes = []
 		for e in event:
 			if e.type==espeakEVENT_MARK:
-				onIndexReached(int(e.id.name))
+				indexNum = int(e.id.name)
+				indexByte = e.audio_position * player.samplesPerSec * 2 / 1000
+				indexByte -= _numBytesPushed
+				indexes.append((indexNum, indexByte))
 			elif e.type==espeakEVENT_LIST_TERMINATED:
 				break
 		if not wav:
-			player.idle()
+			_pushAudioWithBuffer()
 			onIndexReached(None)
 			isSpeaking = False
 			return 0
 		if numsamples > 0:
-			try:
-				player.feed(string_at(wav, numsamples * sizeof(c_short)))
-			except:
-				log.debugWarning("Error feeding audio to nvWave",exc_info=True)
+			wav = string_at(wav, numsamples * sizeof(c_short))
+			prevByte = 0
+			for indexNum, indexByte in indexes:
+				_pushAudioWithBuffer(wav[prevByte:indexByte], indexNum)
+				prevByte = indexByte
+				if not isSpeaking:
+					return 1
+			if prevByte < len(wav):
+				_pushAudioWithBuffer(wav[prevByte:])
+			_numBytesPushed += len(wav)
 		return 0
 	except:
 		log.error("callback", exc_info=True)
@@ -171,10 +235,11 @@ def _execWhenDone(func, *args, **kwargs):
 		func(*args, **kwargs)
 
 def _speak(text):
-	global isSpeaking
+	global isSpeaking, _numBytesPushed
 	uniqueID=c_int()
 	isSpeaking = True
 	flags = espeakCHARS_WCHAR | espeakSSML | espeakPHONEMES
+	_numBytesPushed = 0
 	return espeakDLL.espeak_Synth(text,0,0,0,0,flags,byref(uniqueID),0)
 
 def speak(text):
@@ -182,7 +247,7 @@ def speak(text):
 	_execWhenDone(_speak, text, mustBeAsync=True)
 
 def stop():
-	global isSpeaking, bgQueue
+	global isSpeaking, bgQueue, _prevIndex, _audioBuffer
 	# Kill all speech from now.
 	# We still want parameter changes to occur, so requeue them.
 	params = []
@@ -198,6 +263,8 @@ def stop():
 	for item in params:
 		bgQueue.put(item)
 	isSpeaking = False
+	_prevIndex = None
+	_audioBuffer = ""
 	player.stop()
 
 def pause(switch):
