@@ -1917,7 +1917,8 @@ class SpeechManager(object):
 
 	def _pushNextSpeech(self):
 		seq = self._buildNextUtterance()
-		getSynth().speak(seq)
+		if seq:
+			getSynth().speak(seq)
 
 	def _buildNextUtterance(self):
 		"""Since an utterance might be split over several sequences,
