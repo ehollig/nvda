@@ -202,7 +202,7 @@ def getSpeechForSpelling(text, locale=None, useCharacterDescriptions=False):
 			yield BeepCommand(2000, 50)
 		yield char
 		if uppercase and synth.isSupported("pitch") and synthConfig["capPitchChange"]:
-			yield PitchCommand(multiplier=1)
+			yield PitchCommand()
 		yield EndUtteranceCommand()
 
 def getCharDescListFromText(text,locale):
