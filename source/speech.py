@@ -2028,7 +2028,6 @@ class SpeechManager(object):
 		queueHandler.queueFunction(queueHandler.eventQueue, self._handleIndex, index)
 
 	def _handleIndex(self, index):
-		print index
 		# Find the sequence that just completed speaking.
 		for seqIndex, seq in enumerate(self._speechSequences):
 			lastCommand = seq[-1]
@@ -2037,7 +2036,6 @@ class SpeechManager(object):
 				lastCommand = seq[-2]
 			else:
 				endOfUtterance = False
-			print lastCommand
 			if isinstance(lastCommand, IndexCommand) and index >= lastCommand.index:
 				break # Found it!
 		else:
