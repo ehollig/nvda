@@ -84,7 +84,7 @@ def getLastSpeechIndex():
 @returns: the last index encountered
 @rtype: int
 """
-	return manager.lastFakeIndex
+	return _manager.lastFakeIndex
 
 def cancelSpeech():
 	"""Interupts the synthesizer from currently speaking"""
@@ -102,7 +102,7 @@ def cancelSpeech():
 		return
 	elif speechMode==speechMode_beeps:
 		return
-	manager.cancel()
+	_manager.cancel()
 	beenCanceled=True
 	isPaused=False
 
@@ -188,11 +188,7 @@ def getSpeechForSpelling(text, locale=None, useCharacterDescriptions=False):
 			# Translators: cap will be spoken before the given letter when it is capitalized.
 			char=_("cap %s")%char
 		if uppercase and synth.isSupported("pitch") and synthConfig["capPitchChange"]:
-			oldPitch = synthConfig["pitch"]
-			newPitch = oldPitch + synthConfig["capPitchChange"]
-			newPitch = max(0, min(100, newPitch))
-			multiplier = newPitch / oldPitch
-			yield PitchCommand(multiplier=multiplier)
+			yield PitchCommand(offset=synthConfig["capPitchChange"])
 		if config.conf['speech']['autoLanguageSwitching']:
 			yield LangChangeCommand(locale)
 		if len(char) == 1 and synthConfig["useSpellingFunctionality"]:
@@ -521,7 +517,7 @@ def speak(speechSequence,symbolLevel=None):
 			speechSequence[index]=processText(curLanguage,item,symbolLevel)
 			if not inCharacterMode:
 				speechSequence[index]+=CHUNK_SEPARATOR
-	manager.speak(speechSequence)
+	_manager.speak(speechSequence)
 
 def speakSelectionMessage(message,text):
 	if len(text) < 512:
@@ -1752,52 +1748,110 @@ class BreakCommand(SpeechCommand):
 		return "BreakCommand(time=%d)" % self.time
 
 class EndUtteranceCommand(SpeechCommand):
-	pass
+	"""End the current utterance at this point in the speech.
+	Any text after this will be sent to the synthesizer as a separate utterance.
+	"""
 
-class PitchCommand(SpeechCommand):
+class BaseProsodyCommand(SpeechCommand):
+	"""Base class for commands which change voice prosody; i.e. pitch, rate, etc.
+	The change to the setting is specified using either an offset or a multiplier, but not both.
+	The L{offset} and L{multiplier} properties convert between the two if necessary.
+	To return to the base value, specify neither.
+	This base class should not be instantiated directly.
+	"""
+	#: The name of the setting in the configuration; e.g. pitch, rate, etc.
+	settingName = None
+
+	def __init__(self, offset=0, multiplier=1):
+		"""Constructor.
+		Either of C{offset} or C{multiplier} may be specified, but not both.
+		@param offset: The amount by which to increase/decrease the user configured setting;
+			e.g. 30 increases by 30, -10 decreases by 10, 0 returns to the configured setting.
+		@type offset: int
+		@param multiplier: The number by which to multiply the user configured setting;
+			e.g. 0.5 is half, 1 returns to the configured setting.
+		@param multiplier: int/float
+		"""
+		if offset != 0 and multiplier != 1:
+			raise ValueError("offset and multiplier both specified")
+		self._offset = offset
+		self._multiplier = multiplier
+
+	@property
+	def baseValue(self):
+		"""The base value for the setting as configured by the user.
+		"""
+		synth = getSynth()
+		synthConf = config.conf["speech"][synth.name]
+		return synthConf[self.settingName]
+
+	@property
+	def multiplier(self):
+		"""The number by which to multiply the base value.
+		"""
+		if self._multiplier != 1:
+			# Constructed with multiplier. Just return it.
+			return self._multiplier
+		if self._offset == 0:
+			# Returning to base.
+			return 1
+		# Calculate multiplier from base value and offset.
+		baseVal = self.baseValue
+		newVal = baseVal + self._offset
+		return float(newVal) / baseVal
+
+	@property
+	def offset(self):
+		"""The amount by which to increase/decrease the base value.
+		"""
+		if self._offset != 0:
+			# Constructed with offset. Just return it.
+			return self._offset
+		if self._multiplier == 1:
+			# Returning to base.
+			return 0
+		# Calculate offset from base value and multiplier.
+		baseVal = self.baseValue
+		newVal = baseVal * self._multiplier
+		return int(newVal - baseVal)
+
+	@property
+	def newValue(self):
+		"""The new absolute value after the offset or multiplier is applied to the base value.
+		"""
+		if self._offset != 0:
+			# Calculate using offset.
+			return self.baseValue + self._offset
+		if self._multiplier != 1:
+			# Calculate using multiplier.
+			return int(self.baseValue * self._multiplier)
+		# Returning to base.
+		return self.baseValue
+
+	def __repr__(self):
+		if self._offset != 0:
+			param = "offset=%d" % self._offset
+		elif self._multiplier != 1:
+			param = "multiplier=%g" % self._multiplier
+		else:
+			param = ""
+		return "{type}({param})".format(
+			type=type(self).__name__, param=param)
+
+class PitchCommand(BaseProsodyCommand):
 	"""Change the pitch of the voice.
 	"""
+	settingName = "pitch"
 
-	def __init__(self, multiplier=1):
-		"""
-		@param multiplier: The number by which to multiply the current pitch setting;
-			e.g. 0.5 is half, 1 returns to the current pitch setting.
-		@param multiplier: int/float
-		"""
-		self.multiplier = multiplier
-
-	def __repr__(self):
-		return "PitchCommand(multiplier=%g)" % self.multiplier
-
-class VolumeCommand(SpeechCommand):
+class VolumeCommand(BaseProsodyCommand):
 	"""Change the volume of the voice.
 	"""
+	settingName = "volume"
 
-	def __init__(self, multiplier=1):
-		"""
-		@param multiplier: The number by which to multiply the current volume setting;
-			e.g. 0.5 is half, 1 returns to the current volume setting.
-		@param multiplier: int/float
-		"""
-		self.multiplier = multiplier
-
-	def __repr__(self):
-		return "VolumeCommand(multiplier=%g)" % self.multiplier
-
-class RateCommand(SpeechCommand):
+class RateCommand(BaseProsodyCommand):
 	"""Change the rate of the voice.
 	"""
-
-	def __init__(self, multiplier=1):
-		"""
-		@param multiplier: The number by which to multiply the current rate setting;
-			e.g. 0.5 is half, 1 returns to the current rate setting.
-		@param multiplier: int/float
-		"""
-		self.multiplier = multiplier
-
-	def __repr__(self):
-		return "RateCommand(multiplier=%g)" % self.multiplier
+	settingName = "rate"
 
 class PhonemeCommand(SpeechCommand):
 	"""Insert a specific pronunciation.
@@ -1824,16 +1878,27 @@ class PhonemeCommand(SpeechCommand):
 		return out + ")"
 
 class BaseCallbackCommand(SpeechCommand):
+	"""Base class for commands which cause a function to be called when speech reaches them.
+	This class should not be instantiated directly.
+	It is designed to be subclassed to provide specific functionality;
+	e.g. L{BeepCommand}.
+	To supply a generic function to run, use L{CallbackCommand}.
+	"""
 
 	def run(self):
-		pass
+		"""Code to run when speech reaches this command.
+		"""
 
 class CallbackCommand(BaseCallbackCommand):
+	"""Call a function when speech reaches this point.
+	"""
 
 	def __init__(self, callback):
 		self.run = callback
 
 class BeepCommand(BaseCallbackCommand):
+	"""Produce a beep.
+	"""
 
 	def __init__(self, hz, length, left=50, right=50):
 		self.hz = hz
@@ -1846,6 +1911,8 @@ class BeepCommand(BaseCallbackCommand):
 		tones.beep(self.hz, self.length, left=self.left, right=self.right)
 
 class WaveFileCommand(BaseCallbackCommand):
+	"""Play a wave file.
+	"""
 
 	def __init__(self, fileName):
 		self.fileName = fileName
@@ -1888,7 +1955,7 @@ class SpeechManager(object):
 				# Backwards compatibility. We want to control index numbering,
 				# but some callers may still pass IndexCommands.
 				# We want the old speech.getLastSpeechIndex() API to return this fake index.
-				command = CallbackCommand(self._makeFakeIndexCommand(command.index))
+				command = CallbackCommand(self._makeFakeIndexCallback(command.index))
 			if isinstance(command, BaseCallbackCommand):
 				# When the synth reaches this point, we want to call the callback.
 				speechIndex = next(self._indexCounter)
@@ -1931,6 +1998,7 @@ class SpeechManager(object):
 				utterance.extend(seq[:-1])
 				break
 			utterance.extend(seq)
+		print utterance
 		return utterance
 
 	def _onSynthIndexReached(self, synth=None, index=None):
@@ -1961,7 +2029,7 @@ class SpeechManager(object):
 		if synth != getSynth():
 			return
 
-	def _makeFakeIndexCommand(self, index):
+	def _makeFakeIndexCallback(self, index):
 		def run():
 			self.lastFakeIndex = index
 		return run
@@ -1970,4 +2038,4 @@ class SpeechManager(object):
 		getSynth().cancel()
 		self._reset()
 
-manager = SpeechManager()
+_manager = SpeechManager()
