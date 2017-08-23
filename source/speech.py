@@ -1924,17 +1924,37 @@ class WaveFileCommand(BaseCallbackCommand):
 class SpeechManager(object):
 
 	def __init__(self):
+		#: A counter for indexes sent to the synthesizer for callbacks, etc.
+		self._indexCounter = self._generateIndexes()
 		self._reset()
 		synthDriverHandler.synthIndexReached.register(self._onSynthIndexReached)
 		synthDriverHandler.synthDoneSpeaking.register(self._onSynthDoneSpeaking)
+
+	#: Maximum index number to pass to synthesizers.
+	MAX_INDEX = 9999
+	def _generateIndexes(self):
+		"""Generator of index numbers.
+		We don't want to reuse index numbers too quickly,
+		as there can be race conditions when cancelling speech which might result
+		in an index from a previous utterance being treated as belonging to the current utterance.
+		However, we don't want the counter increasing indefinitely,
+		as some synths might not be able to handle huge numbers.
+		Therefore, we use a counter which starts at 1, counts up to L{MAX_INDEX},
+		wraps back to 1 and continues cycling thus.
+		This maximum is arbitrary, but
+		it's small enough that any synth should be able to handle it
+		and large enough that previous indexes won't reasonably get reused
+		in the same or previous utterance.
+		"""
+		while True:
+			for index in xrange(1, self.MAX_INDEX + 1):
+				yield index
 
 	def _reset(self):
 		#: The pending, processed speech sequences to be spoken.
 		#: These are split at indexes,
 		#: so a single utterance might be split over multiple sequences.
 		self._speechSequences = []
-		#: A counter for indexes sent to the synthesizer for callbacks, etc.
-		self._indexCounter = itertools.count(1)
 		#: Maps indexes to BaseCallbackCommands.
 		self._indexesToCallbacks = {}
 		#: Used for backwards compatibility when the input contains an IndexCommand.
@@ -2004,6 +2024,11 @@ class SpeechManager(object):
 	def _onSynthIndexReached(self, synth=None, index=None):
 		if synth != getSynth():
 			return
+		# This needs to be handled in the main thread.
+		queueHandler.queueFunction(queueHandler.eventQueue, self._handleIndex, index)
+
+	def _handleIndex(self, index):
+		print index
 		# Find the sequence that just completed speaking.
 		for seqIndex, seq in enumerate(self._speechSequences):
 			lastCommand = seq[-1]
@@ -2012,18 +2037,22 @@ class SpeechManager(object):
 				lastCommand = seq[-2]
 			else:
 				endOfUtterance = False
-			if isinstance(lastCommand, IndexCommand) and lastCommand.index >= index:
+			print lastCommand
+			if isinstance(lastCommand, IndexCommand) and index >= lastCommand.index:
 				break # Found it!
 		else:
-			log.error("Unknown index: %d" % index)
+			# Unknown index. Probably from a previous utterance which was cancelled.
 			return
 		# This sequence is done, so we don't need to track it any more.
 		del self._speechSequences[:seqIndex + 1]
 		callbackCommand = self._indexesToCallbacks.get(index)
 		if callbackCommand:
-			queueHandler.queueFunction(queueHandler.eventQueue, callbackCommand.run)
+			try:
+				callbackCommand.run()
+			except:
+				log.exception("Error running speech callback")
 		if endOfUtterance:
-			queueHandler.queueFunction(queueHandler.eventQueue, self._pushNextSpeech)
+			self._pushNextSpeech()
 
 	def _onSynthDoneSpeaking(self, synth=None):
 		if synth != getSynth():
