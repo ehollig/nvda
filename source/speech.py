@@ -1687,7 +1687,15 @@ class SpeechCommand(object):
 	"""
 
 class IndexCommand(SpeechCommand):
-	"""Represents an index within some speech."""
+	"""Marks this point in the speech with an index.
+	When speech reaches this index, the synthesizer notifies NVDA,
+	thus allowing NVDA to perform actions at specific points in the speech;
+	e.g. synchronizing the cursor, beeping or playing a sound.
+	Callers should not use this directly in new code.
+	Instead, use one of the subclasses of L{BaseCallbackCommand}.
+	NVDA handles the indexing and dispatches callbacks as appropriate.
+	However, synth drivers should support this command.
+	"""
 
 	def __init__(self,index):
 		"""
@@ -1751,6 +1759,9 @@ class EndUtteranceCommand(SpeechCommand):
 	"""End the current utterance at this point in the speech.
 	Any text after this will be sent to the synthesizer as a separate utterance.
 	"""
+
+	def __repr__(self):
+		return "EndUtteranceCommand()"
 
 class BaseProsodyCommand(SpeechCommand):
 	"""Base class for commands which change voice prosody; i.e. pitch, rate, etc.
@@ -1910,6 +1921,10 @@ class BeepCommand(BaseCallbackCommand):
 		import tones
 		tones.beep(self.hz, self.length, left=self.left, right=self.right)
 
+	def __repr__(self):
+		return "BeepCommand({hz}, {length}, left={left}, right={right})".format(
+			hz=self.hz, length=self.length, left=self.left, right=self.right)
+
 class WaveFileCommand(BaseCallbackCommand):
 	"""Play a wave file.
 	"""
@@ -1920,6 +1935,9 @@ class WaveFileCommand(BaseCallbackCommand):
 	def run(self):
 		import nvwave
 		nvwave.playWaveFile(self.fileName, async=False)
+
+	def __repr__(self):
+		return "WaveFileCommand(%r)" % self.fileName
 
 class SpeechManager(object):
 
@@ -1969,13 +1987,9 @@ class SpeechManager(object):
 
 	def _queueSpeechSequence(self, inSeq):
 		outSeq = []
+		inSeq = self._compatProcessInput(inSeq)
 		for command in inSeq:
 			splitSeq = False
-			if isinstance(command, IndexCommand):
-				# Backwards compatibility. We want to control index numbering,
-				# but some callers may still pass IndexCommands.
-				# We want the old speech.getLastSpeechIndex() API to return this fake index.
-				command = CallbackCommand(self._makeFakeIndexCallback(command.index))
 			if isinstance(command, BaseCallbackCommand):
 				# When the synth reaches this point, we want to call the callback.
 				speechIndex = next(self._indexCounter)
@@ -2027,7 +2041,14 @@ class SpeechManager(object):
 		# This needs to be handled in the main thread.
 		queueHandler.queueFunction(queueHandler.eventQueue, self._handleIndex, index)
 
-	def _handleIndex(self, index):
+	def _removeCompletedFromQueue(self, index):
+		"""Removes completed speech sequences from the queue.
+		@param index: The index just reached indicating a completed sequence.
+		@return: Tuple of (valid, endOfUtterance),
+			where valid indicates whether the index was valid and
+			endOfUtterance indicates whether this sequence was the end of the current utterance.
+		@rtype: (bool, bool)
+		"""
 		# Find the sequence that just completed speaking.
 		for seqIndex, seq in enumerate(self._speechSequences):
 			lastCommand = seq[-1]
@@ -2040,10 +2061,16 @@ class SpeechManager(object):
 				break # Found it!
 		else:
 			# Unknown index. Probably from a previous utterance which was cancelled.
-			return
+			return False, False
 		# This sequence is done, so we don't need to track it any more.
 		del self._speechSequences[:seqIndex + 1]
-		callbackCommand = self._indexesToCallbacks.get(index)
+		return True, endOfUtterance
+
+	def _handleIndex(self, index):
+		valid, endOfUtterance = self._removeCompletedFromQueue(index)
+		if not valid:
+			return
+		callbackCommand = self._indexesToCallbacks.pop(index, None)
 		if callbackCommand:
 			try:
 				callbackCommand.run()
@@ -2056,13 +2083,25 @@ class SpeechManager(object):
 		if synth != getSynth():
 			return
 
-	def _makeFakeIndexCallback(self, index):
-		def run():
-			self.lastFakeIndex = index
-		return run
-
 	def cancel(self):
 		getSynth().cancel()
 		self._reset()
+
+	def _compatProcessInput(self, inSeq):
+		"""Backwards compatibility processing of input speech sequences.
+		"""
+		for command in inSeq:
+			if isinstance(command, IndexCommand):
+				# We want to control index numbering,
+				# but some callers may still pass IndexCommands.
+				# We want the old speech.getLastSpeechIndex() API to return this fake index.
+				yield CallbackCommand(self._compatMakeFakeIndexCallback(command.index))
+			else:
+				yield command
+
+	def _compatMakeFakeIndexCallback(self, index):
+		def run():
+			self.lastFakeIndex = index
+		return run
 
 _manager = SpeechManager()
