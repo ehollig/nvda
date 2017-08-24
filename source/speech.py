@@ -1986,10 +1986,12 @@ class SpeechManager(object):
 				yield index
 
 	def _reset(self):
+		#: The pending, unprocessed speech sequences to be spoken.
+		self._unprocessedSequences = []
 		#: The pending, processed speech sequences to be spoken.
 		#: These are split at indexes,
 		#: so a single utterance might be split over multiple sequences.
-		self._speechSequences = []
+		self._processedSequences = []
 		#: Maps indexes to BaseCallbackCommands.
 		self._indexesToCallbacks = {}
 		#: Used for backwards compatibility when the input contains an IndexCommand.
@@ -1997,12 +1999,18 @@ class SpeechManager(object):
 
 	def speak(self, speechSequence):
 		# If there was nothing queued already, we need to push the first speech.
-		push = not self._speechSequences
+		push = not self._processedSequences
 		self._queueSpeechSequence(speechSequence)
 		if push:
 			self._pushNextSpeech()
 
 	def _queueSpeechSequence(self, inSeq):
+		self._unprocessedSequences.append(inSeq)
+
+	def _processNextSequence(self):
+		if not self._unprocessedSequences:
+			return
+		inSeq = self._unprocessedSequences.pop(0)
 		outSeq = []
 		inSeq = self._compatProcessInput(inSeq)
 		for command in inSeq:
@@ -2017,8 +2025,8 @@ class SpeechManager(object):
 			elif isinstance(command, EndUtteranceCommand):
 				if outSeq:
 					lastOut = outSeq[-1]
-				elif self._speechSequences:
-					lastOutSeq = self._speechSequences[-1]
+				elif self._processedSequences:
+					lastOutSeq = self._processedSequences[-1]
 					lastOut = lastOutSeq[-1]
 				else:
 					lastOut = None
@@ -2039,7 +2047,7 @@ class SpeechManager(object):
 			else:
 				outSeq.append(command)
 			if splitSeq:
-				self._speechSequences.append(outSeq)
+				self._processedSequences.append(outSeq)
 				outSeq = []
 		# Add the final output sequence.
 		if outSeq:
@@ -2048,9 +2056,11 @@ class SpeechManager(object):
 				speechIndex = next(self._indexCounter)
 				outSeq.append(IndexCommand(speechIndex))
 			outSeq.append(EndUtteranceCommand())
-			self._speechSequences.append(outSeq)
+			self._processedSequences.append(outSeq)
 
 	def _pushNextSpeech(self):
+		if not self._processedSequences:
+			self._processNextSequence()
 		seq = self._buildNextUtterance()
 		if seq:
 			synth = getSynth()
@@ -2065,7 +2075,7 @@ class SpeechManager(object):
 		build a complete utterance to pass to the synth.
 		"""
 		utterance = []
-		for seq in self._speechSequences:
+		for seq in self._processedSequences:
 			if isinstance(seq[-1], EndUtteranceCommand):
 				# The utterance ends here.
 				utterance.extend(seq[:-1])
@@ -2089,7 +2099,7 @@ class SpeechManager(object):
 		@rtype: (bool, bool)
 		"""
 		# Find the sequence that just completed speaking.
-		for seqIndex, seq in enumerate(self._speechSequences):
+		for seqIndex, seq in enumerate(self._processedSequences):
 			lastCommand = seq[-1]
 			if isinstance(lastCommand, EndUtteranceCommand):
 				endOfUtterance = True
@@ -2102,7 +2112,7 @@ class SpeechManager(object):
 			# Unknown index. Probably from a previous utterance which was cancelled.
 			return False, False
 		# This sequence is done, so we don't need to track it any more.
-		del self._speechSequences[:seqIndex + 1]
+		del self._processedSequences[:seqIndex + 1]
 		return True, endOfUtterance
 
 	def _handleIndex(self, index):
@@ -2121,7 +2131,7 @@ class SpeechManager(object):
 	def cancel(self):
 		getSynth().cancel()
 		# Run callbacks that must be run on cancel.
-		for seq in self._speechSequences:
+		for seq in self._processedSequences:
 			lastCommand = seq[-1]
 			if isinstance(lastCommand, EndUtteranceCommand):
 				lastCommand = seq[-2]
@@ -2201,7 +2211,7 @@ class SpeechManager(object):
 		self._compatPollIndexTimer = wx.PyTimer(self._compatPollIndex)
 		self._compatPollIndexTimer.Start(self.COMPAT_POLL_INDEX_INTERVAL)
 		log.debug("Started compat index polling")
-		firstCommand = self._speechSequences[0][0] if self._speechSequences else None
+		firstCommand = self._processedSequences[0][0] if self._processedSequences else None
 		if isinstance(firstCommand, IndexCommand):
 			# We start with an index, so fire it right away to avoid an initial delay.
 			self._handleIndex(firstCommand.index)
