@@ -30,6 +30,17 @@ class SynthDriver(SynthDriver):
 		SynthDriver.InflectionSetting(),
 		SynthDriver.VolumeSetting(),
 	)
+	supportedCommands = {
+		speech.IndexCommand,
+		speech.CharacterModeCommand,
+		speech.LangChangeCommand,
+		speech.BreakCommand,
+		speech.PitchCommand,
+		speech.RateCommand,
+		speech.VolumeCommand,
+		speech.PhonemeCommand,
+	}
+	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
 	@classmethod
 	def check(cls):
@@ -124,8 +135,6 @@ class SynthDriver(SynthDriver):
 					log.debugWarning("Unknown character in IPA string: %s"%item.ipa)
 					if item.text:
 						textList.append(self._processText(item.text))
-			elif isinstance(item,speech.SpeechCommand):
-				log.debugWarning("Unsupported speech command: %s"%item)
 			else:
 				log.error("Unknown speech: %s"%item)
 		# Close any open tags.

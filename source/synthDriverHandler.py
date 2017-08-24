@@ -185,7 +185,10 @@ class SynthDriver(baseObject.AutoPropertyObject):
 	Each setting is retrieved and set using attributes named after the setting;
 	e.g. the L{voice} attribute is used for the L{voice} setting.
 	These will usually be properties.
-	The L{lastIndex} attribute should also be provided.
+	L{supportedCommands} should specify what synth commands the synthesizer supports.
+	At a minimum, L{speech.IndexCommand} must be supported.
+	L{supportedNotifications} should specify what notifications the synthesizer provides.
+	Currently, the available notifications are L{synthIndexReached} and L{synthDoneSpeaking}.
 	@ivar supportedSettings: The settings supported by the synthesiser.
 	@type supportedSettings: list or tuple of L{SynthSetting}
 	@ivar voice: Unique string identifying the current voice.
@@ -204,8 +207,6 @@ class SynthDriver(baseObject.AutoPropertyObject):
 	@type availableVariants: OrderedDict of [L{VoiceInfo} keyed by VoiceInfo's ID
 	@ivar inflection: The current inflection; ranges between 0 and 100.
 	@type inflection: int
-	@ivar lastIndex: The index of the chunk of text which was last spoken or C{None} if no index.
-	@type lastIndex: int
 	"""
 
 	#: The name of the synth; must be the original module file name.
@@ -214,6 +215,12 @@ class SynthDriver(baseObject.AutoPropertyObject):
 	#: A description of the synth.
 	#: @type: str
 	description = ""
+	#: The speech commands supported by the synth.
+	#: @type: set of L{speech.SynthCommand} subclasses.
+	supportedCommands = frozenset()
+	#: The notifications provided by the synth.
+	#: @type: set of L{extensionPoints.Action} instances
+	supportedNotifications = frozenset()
 
 	@classmethod
 	def LanguageSetting(cls):
@@ -296,8 +303,8 @@ class SynthDriver(baseObject.AutoPropertyObject):
 		"""
 		Speaks the given sequence of text and speech commands.
 		This base implementation will fallback to making use of the old speakText and speakCharacter methods. But new synths should override this method to support its full functionality.
-		@param speechSequence: a list of text strings and SpeechCommand objects (such as index and parameter changes).
-		@type speechSequence: list of string and L{speechCommand}
+		@param speechSequence: a list of text strings and SynthCommand objects (such as index and parameter changes).
+		@type speechSequence: list of string and L{SynthCommand}
 		"""
 		import speech
 		lastIndex=None
@@ -322,8 +329,8 @@ class SynthDriver(baseObject.AutoPropertyObject):
 				lastIndex=item.index
 			elif isinstance(item,speech.CharacterModeCommand):
 				origSpeakFunc=self.speakCharacter if item.state else self.speakText
-			elif isinstance(item,speech.SpeechCommand):
-				log.debugWarning("Unknown speech command: %s"%item)
+			elif isinstance(item,speech.SynthCommand):
+				log.debugWarning("Unknown synth command: %s"%item)
 			else:
 				log.error("Unknown item in speech sequence: %s"%item)
 
@@ -350,11 +357,8 @@ class SynthDriver(baseObject.AutoPropertyObject):
 		self.speakText(character,index)
 
 	def _get_lastIndex(self):
-		"""Obtain the index of the chunk of text which was last spoken.
-		When the synth speaks text associated with a particular index, this method should return that index.
-		That is, this property should update for each chunk of text spoken by the synth.
-		@return: The index or C{None} if no index.
-		@rtype: int
+		"""@deprecated: Callers should use subclasses of L{speech.BaseCallbackCommand} to perform actions at various points in speech.
+			Drivers should notify about indexes using L{synthIndexReached} instead.
 		"""
 		return None
 

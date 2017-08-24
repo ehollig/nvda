@@ -89,6 +89,17 @@ class SynthDriver(SynthDriver):
 		SynthDriver.PitchSetting(),
 		SynthDriver.VolumeSetting(),
 	)
+	supportedCommands = {
+		speech.IndexCommand,
+		speech.CharacterModeCommand,
+		speech.LangChangeCommand,
+		speech.BreakCommand,
+		speech.PitchCommand,
+		speech.RateCommand,
+		speech.VolumeCommand,
+		speech.PhonemeCommand,
+	}
+	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 	# These are all controlled via SSML, so we only need attributes, not properties.
 	rate = None
 	pitch = None

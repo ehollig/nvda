@@ -12,6 +12,7 @@ import itertools
 import weakref
 import unicodedata
 import time
+import warnings
 import colors
 import globalVars
 from logHandler import log
@@ -84,7 +85,7 @@ def getLastSpeechIndex():
 @returns: the last index encountered
 @rtype: int
 """
-	return _manager.lastFakeIndex
+	return _manager.compatLastFakeIndex
 
 def cancelSpeech():
 	"""Interupts the synthesizer from currently speaking"""
@@ -1682,11 +1683,16 @@ speakWithoutPauses._pendingSpeechSequence=[]
 
 
 class SpeechCommand(object):
-	"""
-	The base class for objects that can be inserted between string of text for parituclar speech functions that convey  things such as indexing or voice parameter changes.
+	"""The base class for objects that can be inserted between strings of text to perform actions, change voice parameters, etc.
+	Note that some of these commands are processed by NVDA and are not directly passed to synth drivers.
+	synth drivers will only receive commands derived from L{SynthCommand}.
 	"""
 
-class IndexCommand(SpeechCommand):
+class SynthCommand(SpeechCommand):
+	"""Commands that can be passed to synth drivers.
+	"""
+
+class IndexCommand(SynthCommand):
 	"""Marks this point in the speech with an index.
 	When speech reaches this index, the synthesizer notifies NVDA,
 	thus allowing NVDA to perform actions at specific points in the speech;
@@ -1694,7 +1700,6 @@ class IndexCommand(SpeechCommand):
 	Callers should not use this directly in new code.
 	Instead, use one of the subclasses of L{BaseCallbackCommand}.
 	NVDA handles the indexing and dispatches callbacks as appropriate.
-	However, synth drivers should support this command.
 	"""
 
 	def __init__(self,index):
@@ -1708,7 +1713,7 @@ class IndexCommand(SpeechCommand):
 	def __repr__(self):
 		return "IndexCommand(%r)" % self.index
 
-class CharacterModeCommand(SpeechCommand):
+class CharacterModeCommand(SynthCommand):
 	"""Turns character mode on and off for speech synths."""
 
 	def __init__(self,state):
@@ -1722,7 +1727,7 @@ class CharacterModeCommand(SpeechCommand):
 	def __repr__(self):
 		return "CharacterModeCommand(%r)" % self.state
 
-class LangChangeCommand(SpeechCommand):
+class LangChangeCommand(SynthCommand):
 	"""A command to switch the language within speech."""
 
 	def __init__(self,lang):
@@ -1741,7 +1746,7 @@ class SpeakWithoutPausesBreakCommand(SpeechCommand):
 	This will be removed during processing.
 	"""
 
-class BreakCommand(SpeechCommand):
+class BreakCommand(SynthCommand):
 	"""Insert a break between words.
 	"""
 
@@ -1763,7 +1768,7 @@ class EndUtteranceCommand(SpeechCommand):
 	def __repr__(self):
 		return "EndUtteranceCommand()"
 
-class BaseProsodyCommand(SpeechCommand):
+class BaseProsodyCommand(SynthCommand):
 	"""Base class for commands which change voice prosody; i.e. pitch, rate, etc.
 	The change to the setting is specified using either an offset or a multiplier, but not both.
 	The L{offset} and L{multiplier} properties convert between the two if necessary.
@@ -1787,6 +1792,9 @@ class BaseProsodyCommand(SpeechCommand):
 			raise ValueError("offset and multiplier both specified")
 		self._offset = offset
 		self._multiplier = multiplier
+		#: Whether this returns the setting to the base value; i.e. no offset or multiplier.
+		#: @type: bool
+		self.isBase = offset == 0 and multiplier == 1
 
 	@property
 	def baseValue(self):
@@ -1864,7 +1872,7 @@ class RateCommand(BaseProsodyCommand):
 	"""
 	settingName = "rate"
 
-class PhonemeCommand(SpeechCommand):
+class PhonemeCommand(SynthCommand):
 	"""Insert a specific pronunciation.
 	This command accepts Unicode International Phonetic Alphabet (IPA) characters.
 	Note that this is not well supported by synthesizers.
@@ -1894,7 +1902,11 @@ class BaseCallbackCommand(SpeechCommand):
 	It is designed to be subclassed to provide specific functionality;
 	e.g. L{BeepCommand}.
 	To supply a generic function to run, use L{CallbackCommand}.
+	This command is never passed to synth drivers.
 	"""
+	#: Whether this callback should be executed even if speech is cancelled before this command is reached.
+	#: @type: bool
+	runOnCancel = False
 
 	def run(self):
 		"""Code to run when speech reaches this command.
@@ -1944,9 +1956,10 @@ class SpeechManager(object):
 	def __init__(self):
 		#: A counter for indexes sent to the synthesizer for callbacks, etc.
 		self._indexCounter = self._generateIndexes()
+		#: A timer to poll for indexes for synths which don't support synthIndexReached notifications.
+		self._compatPollIndexTimer = None
 		self._reset()
 		synthDriverHandler.synthIndexReached.register(self._onSynthIndexReached)
-		synthDriverHandler.synthDoneSpeaking.register(self._onSynthDoneSpeaking)
 
 	#: Maximum index number to pass to synthesizers.
 	MAX_INDEX = 9999
@@ -1976,7 +1989,7 @@ class SpeechManager(object):
 		#: Maps indexes to BaseCallbackCommands.
 		self._indexesToCallbacks = {}
 		#: Used for backwards compatibility when the input contains an IndexCommand.
-		self.lastFakeIndex = None
+		self.compatLastFakeIndex = None
 
 	def speak(self, speechSequence):
 		# If there was nothing queued already, we need to push the first speech.
@@ -1998,11 +2011,27 @@ class SpeechManager(object):
 				# We split at indexes so we easily know what has completed speaking.
 				splitSeq = True
 			elif isinstance(command, EndUtteranceCommand):
-				# Add an index so we know when we've reached the end of this utterance.
-				speechIndex = next(self._indexCounter)
-				outSeq.append(IndexCommand(speechIndex))
-				outSeq.append(command)
-				splitSeq = True
+				if outSeq:
+					lastOut = outSeq[-1]
+				elif self._speechSequences:
+					lastOutSeq = self._speechSequences[-1]
+					lastOut = lastOutSeq[-1]
+				else:
+					lastOut = None
+				if not lastOut or isinstance(lastOut, EndUtteranceCommand):
+					# It doesn't make sense to start with or repeat EndUtteranceCommands.
+					continue
+				elif isinstance(lastOut, IndexCommand):
+					# The previous sequence already ends with an index, so end the utterance immediately after.
+					assert not outSeq, "outSeq ends with IndexCommand but wasn't split"
+					lastOutSeq.append(command)
+				else:
+					# Add an index so we know when we've reached the end of this utterance.
+					assert outSeq, "outSeq doesn't end with IndexCommand or EndUtteranceCommand but was split"
+					speechIndex = next(self._indexCounter)
+					outSeq.append(IndexCommand(speechIndex))
+					outSeq.append(command)
+					splitSeq = True
 			else:
 				outSeq.append(command)
 			if splitSeq:
@@ -2010,16 +2039,21 @@ class SpeechManager(object):
 				outSeq = []
 		# Add the final output sequence.
 		if outSeq:
-			# Add an index so we know when we've reached the end of this utterance.
-			speechIndex = next(self._indexCounter)
-			outSeq.append(IndexCommand(speechIndex))
+			if not isinstance(outSeq[-1], IndexCommand):
+				# Add an index so we know when we've reached the end of this utterance.
+				speechIndex = next(self._indexCounter)
+				outSeq.append(IndexCommand(speechIndex))
 			outSeq.append(EndUtteranceCommand())
 			self._speechSequences.append(outSeq)
 
 	def _pushNextSpeech(self):
 		seq = self._buildNextUtterance()
 		if seq:
-			getSynth().speak(seq)
+			synth = getSynth()
+			self._compatMaybeStartPollIndex(synth)
+			synth.speak(seq)
+		else:
+			self._compatMaybeStopPollIndex()
 
 	def _buildNextUtterance(self):
 		"""Since an utterance might be split over several sequences,
@@ -2079,29 +2113,106 @@ class SpeechManager(object):
 		if endOfUtterance:
 			self._pushNextSpeech()
 
-	def _onSynthDoneSpeaking(self, synth=None):
-		if synth != getSynth():
-			return
-
 	def cancel(self):
 		getSynth().cancel()
+		# Run callbacks that must be run on cancel.
+		for seq in self._speechSequences:
+			lastCommand = seq[-1]
+			if isinstance(lastCommand, EndUtteranceCommand):
+				lastCommand = seq[-2]
+			if isinstance(lastCommand, IndexCommand):
+				callback = self._indexesToCallbacks.get(lastCommand.index)
+				if callback and callback.runOnCancel:
+					try:
+						callback.run()
+					except:
+						log.exception("Error running speech callback on cancel")
 		self._reset()
+		self._compatMaybeStopPollIndex()
 
+	COMPAT_ASSUMED_SUPPORTED_COMMANDS = (IndexCommand, CharacterModeCommand, LangChangeCommand)
 	def _compatProcessInput(self, inSeq):
 		"""Backwards compatibility processing of input speech sequences.
 		"""
+		synth = getSynth()
+		supportedCommands = synth.supportedCommands
+		if not supportedCommands:
+			# This is an old driver which doesn't declare supported commands.
+			# We assume support for certain commands in this case for backwards compatibility.
+			supportedCommands = self.COMPAT_ASSUMED_SUPPORTED_COMMANDS
+		pitchNeedsReset = False
 		for command in inSeq:
 			if isinstance(command, IndexCommand):
 				# We want to control index numbering,
 				# but some callers may still pass IndexCommands.
 				# We want the old speech.getLastSpeechIndex() API to return this fake index.
+				warnings.warn(DeprecationWarning(
+					"Passing IndexCommand to speech.speak is deprecated. Use CallbackCommand instead."))
 				yield CallbackCommand(self._compatMakeFakeIndexCallback(command.index))
+			elif isinstance(command, PitchCommand) and PitchCommand not in supportedCommands:
+				# Backwards compat for raise pitch for capitals.
+				warnings.warn(DeprecationWarning(
+					"Tweaking pitch setting for inline pitch changes is deprecated. Synths should support PitchCommand."))
+				pitchNeedsReset = not command.isBase
+				yield CallbackCommand(self._compatMakeSetPitchCallback(synth, command))
+				yield EndUtteranceCommand()
+			elif isinstance(command, BreakCommand) and BreakCommand not in supportedCommands:
+				warnings.warn(RuntimeWarning(
+					"BreakCommand not supported. Replacing with EndUtteranceCommand."))
+				yield EndUtteranceCommand()
+			elif isinstance(command, SynthCommand) and type(command) not in supportedCommands:
+				log.debugWarning("Synth does not support %r" % command)
+				continue
 			else:
 				yield command
+		if pitchNeedsReset:
+			command = CallbackCommand(self._compatMakeSetPitchCallback(synth, PitchCommand()))
+			command.runOnCancel = True
+			yield command
 
 	def _compatMakeFakeIndexCallback(self, index):
 		def run():
 			self.lastFakeIndex = index
 		return run
+
+	def _compatMakeSetPitchCallback(self, synth, command):
+		def run():
+			synth.pitch = command.newValue
+		return run
+
+	COMPAT_POLL_INDEX_INTERVAL = 30
+	def _compatMaybeStartPollIndex(self, synth):
+		if self._compatPollIndexTimer:
+			return # Already started.
+		if synthDriverHandler.synthIndexReached in synth.supportedNotifications:
+			return # Synth supports index notifications itself.
+		warnings.warn(DeprecationWarning(
+			"SynthDriver.lastIndex is deprecated. Use synthIndexReached notifications instead."))
+		# Import late so speech loads as fast as possible at startup.
+		import wx
+		self._compatLastSynthIndex = None
+		self._compatPollIndexTimer = wx.PyTimer(self._compatPollIndex)
+		self._compatPollIndexTimer.Start(self.COMPAT_POLL_INDEX_INTERVAL)
+		log.debug("Started compat index polling")
+		firstCommand = self._speechSequences[0][0] if self._speechSequences else None
+		if isinstance(firstCommand, IndexCommand):
+			# We start with an index, so fire it right away to avoid an initial delay.
+			self._handleIndex(firstCommand.index)
+
+	def _compatMaybeStopPollIndex(self):
+		if self._compatPollIndexTimer:
+			self._compatPollIndexTimer.Stop()
+			self._compatPollIndexTimer = None
+			log.debug("Stopped compat index polling")
+
+	def _compatPollIndex(self):
+		"""Backwards compatibility for synths which support indexing but don't notify about it.
+		This method regularly polls the synth's lastIndex attribute and fires a notification if it changes.
+		"""
+		synth = getSynth()
+		index = synth.lastIndex
+		if index != self._compatLastSynthIndex:
+			synthDriverHandler.synthIndexReached.notify(synth=synth, index=index)
+			self._compatLastSynthIndex = index
 
 _manager = SpeechManager()

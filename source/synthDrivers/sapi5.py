@@ -92,6 +92,17 @@ class SapiSink(object):
 
 class SynthDriver(SynthDriver):
 	supportedSettings=(SynthDriver.VoiceSetting(),SynthDriver.RateSetting(),SynthDriver.PitchSetting(),SynthDriver.VolumeSetting())
+	supportedCommands = {
+		speech.IndexCommand,
+		speech.CharacterModeCommand,
+		speech.LangChangeCommand,
+		speech.BreakCommand,
+		speech.PitchCommand,
+		speech.RateCommand,
+		speech.VolumeCommand,
+		speech.PhonemeCommand,
+	}
+	supportedNotifications = {synthIndexReached, synthDoneSpeaking}
 
 	COM_CLASS = "SAPI.SPVoice"
 
