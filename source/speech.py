@@ -2050,8 +2050,9 @@ class SpeechManager(object):
 		seq = self._buildNextUtterance()
 		if seq:
 			synth = getSynth()
-			self._compatMaybeStartPollIndex(synth)
-			synth.speak(seq)
+			shouldSpeak = self._compatMaybeStartPollIndex(synth)
+			if shouldSpeak:
+				synth.speak(seq)
 		else:
 			self._compatMaybeStopPollIndex()
 
@@ -2177,15 +2178,19 @@ class SpeechManager(object):
 
 	def _compatMakeSetPitchCallback(self, synth, command):
 		def run():
-			synth.pitch = command.newValue
+			val = command.newValue
+			log.debug("Setting pitch to %d" % val)
+			synth.pitch = val
 		return run
 
 	COMPAT_POLL_INDEX_INTERVAL = 30
 	def _compatMaybeStartPollIndex(self, synth):
+		"""Returns True if _pushNextSpeech should speak, False otherwise.
+		"""
 		if self._compatPollIndexTimer:
-			return # Already started.
+			return True # Already started.
 		if synthDriverHandler.synthIndexReached in synth.supportedNotifications:
-			return # Synth supports index notifications itself.
+			return True # Synth supports index notifications itself.
 		warnings.warn(DeprecationWarning(
 			"SynthDriver.lastIndex is deprecated. Use synthIndexReached notifications instead."))
 		# Import late so speech loads as fast as possible at startup.
@@ -2198,6 +2203,9 @@ class SpeechManager(object):
 		if isinstance(firstCommand, IndexCommand):
 			# We start with an index, so fire it right away to avoid an initial delay.
 			self._handleIndex(firstCommand.index)
+			# _handleIndex tweaks the queue and pushes speech, so our caller shouldn't speak.
+			return False
+		return True
 
 	def _compatMaybeStopPollIndex(self):
 		if self._compatPollIndexTimer:
