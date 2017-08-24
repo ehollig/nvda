@@ -1952,6 +1952,10 @@ class WaveFileCommand(BaseCallbackCommand):
 		return "WaveFileCommand(%r)" % self.fileName
 
 class SpeechManager(object):
+	"""Manages queuing of speech utterances, calling callbacks at desired points in the speech, etc.
+	This is intended for internal use only.
+	It is used by higher level functions such as L{speak}.
+	"""
 
 	def __init__(self):
 		#: A counter for indexes sent to the synthesizer for callbacks, etc.
@@ -2147,8 +2151,6 @@ class SpeechManager(object):
 				# We want to control index numbering,
 				# but some callers may still pass IndexCommands.
 				# We want the old speech.getLastSpeechIndex() API to return this fake index.
-				warnings.warn(DeprecationWarning(
-					"Passing IndexCommand to speech.speak is deprecated. Use CallbackCommand instead."))
 				yield CallbackCommand(self._compatMakeFakeIndexCallback(command.index))
 			elif isinstance(command, PitchCommand) and PitchCommand not in supportedCommands:
 				# Backwards compat for raise pitch for capitals.
@@ -2223,4 +2225,6 @@ class SpeechManager(object):
 			synthDriverHandler.synthIndexReached.notify(synth=synth, index=index)
 			self._compatLastSynthIndex = index
 
+#: The singleton SpeechManager instance used for speech functions.
+#: @type: L{SpeechManager}
 _manager = SpeechManager()
