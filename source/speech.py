@@ -2097,6 +2097,7 @@ class SpeechManager(object):
 
 	def _pushNextSpeech(self, initial):
 		if not self._processedSequences:
+			self._compatMaybeFakeDoneSpeaking()
 			if self._unprocessedSequences and isinstance(self._unprocessedSequences[0], ConfigProfileTriggerCommand):
 				if initial:
 					self._switchProfile()
@@ -2300,6 +2301,19 @@ class SpeechManager(object):
 		if index != self._compatLastSynthIndex:
 			synthDriverHandler.synthIndexReached.notify(synth=synth, index=index)
 			self._compatLastSynthIndex = index
+
+	COMPAT_FAKE_DONE_SPEAKING_DELAY = 500
+	def _compatMaybeFakeDoneSpeaking(self):
+		"""Backwards compatibility for synths which support indexing but don't notify when they're done speaking.
+		This runs after the index at the end of the utterance
+		and fires a done speaking notification after a short delay.
+		"""
+		synth = getSynth()
+		if synthDriverHandler.synthDoneSpeaking in synth.supportedNotifications:
+			return # Synth supports done speaking notifications itself.
+		# Import late so speech loads as fast as possible at startup.
+		import wx
+		wx.CallLater(self.COMPAT_FAKE_DONE_SPEAKING_DELAY, synthDriverHandler.synthDoneSpeaking.notify, synth=synth)
 
 #: The singleton SpeechManager instance used for speech functions.
 #: @type: L{SpeechManager}
