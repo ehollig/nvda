@@ -1951,6 +1951,28 @@ class WaveFileCommand(BaseCallbackCommand):
 	def __repr__(self):
 		return "WaveFileCommand(%r)" % self.fileName
 
+class ConfigProfileTriggerCommand(BaseCallbackCommand):
+	"""Applies (or stops applying) a configuration profile trigger to subsequent speech.
+	"""
+
+	def __init__(self, trigger, enter=True):
+		"""
+		@param trigger: The configuration profile trigger.
+		@type trigger: L{config.ProfileTrigger}
+		@param enter: C{True} to apply the trigger, C{False} to stop applying it.
+		@type enter: bool
+		"""
+		self.trigger = trigger
+		self.enter = enter
+		trigger._shouldNotifyProfileSwitch = False
+
+	def run(self):
+		if self.enter:
+			self.trigger.enter()
+		else:
+			self.trigger.exit()
+		synthDriverHandler.handleConfigProfileSwitch()
+
 class SpeechManager(object):
 	"""Manages queuing of speech utterances, calling callbacks at desired points in the speech, etc.
 	This is intended for internal use only.
@@ -1964,6 +1986,7 @@ class SpeechManager(object):
 		self._compatPollIndexTimer = None
 		self._reset()
 		synthDriverHandler.synthIndexReached.register(self._onSynthIndexReached)
+		synthDriverHandler.synthDoneSpeaking.register(self._onSynthDoneSpeaking)
 
 	#: Maximum index number to pass to synthesizers.
 	MAX_INDEX = 9999
@@ -2005,12 +2028,29 @@ class SpeechManager(object):
 			self._pushNextSpeech()
 
 	def _queueSpeechSequence(self, inSeq):
-		self._unprocessedSequences.append(inSeq)
+		outSeq = []
+		for command in inSeq:
+			if isinstance(command, ConfigProfileTriggerCommand):
+				if not command.trigger.hasProfile:
+					continue
+				# All sequences after a profile switch must be processed
+				# after the switch actually occurs. Therefore, split here.
+				self._unprocessedSequences.append(outSeq)
+				self._unprocessedSequences.append(command)
+				outSeq = []
+			else:
+				outSeq.append(command)
+		if outSeq:
+			self._unprocessedSequences.append(outSeq)
 
 	def _processNextSequence(self):
 		if not self._unprocessedSequences:
-			return
-		inSeq = self._unprocessedSequences.pop(0)
+			return False
+		inSeq = self._unprocessedSequences[0]
+		if isinstance(inSeq, ConfigProfileTriggerCommand):
+			# _onSynthDoneSpeaking will handle the profile switch.
+			return False
+		del self._unprocessedSequences[0]
 		outSeq = []
 		inSeq = self._compatProcessInput(inSeq)
 		for command in inSeq:
@@ -2057,10 +2097,13 @@ class SpeechManager(object):
 				outSeq.append(IndexCommand(speechIndex))
 			outSeq.append(EndUtteranceCommand())
 			self._processedSequences.append(outSeq)
+		return True
 
 	def _pushNextSpeech(self):
 		if not self._processedSequences:
-			self._processNextSequence()
+			shouldSpeak = self._processNextSequence()
+			if not shouldSpeak:
+				return
 		seq = self._buildNextUtterance()
 		if seq:
 			synth = getSynth()
@@ -2127,6 +2170,24 @@ class SpeechManager(object):
 				log.exception("Error running speech callback")
 		if endOfUtterance:
 			self._pushNextSpeech()
+
+	def _onSynthDoneSpeaking(self, synth=None):
+		if synth != getSynth():
+			return
+		if self._unprocessedSequences and isinstance(self._unprocessedSequences[0], ConfigProfileTriggerCommand):
+			queueHandler.queueFunction(queueHandler.eventQueue, self._switchProfile)
+
+	def _switchProfile(self):
+		if self._processedSequences:
+			# This must have been a synthDoneSpeaking notification from an earlier utterance.
+			return
+		command = self._unprocessedSequences.pop(0)
+		assert isinstance(command, ConfigProfileTriggerCommand), "First unprocessed command should be a ConfigProfileTriggerCommand"
+		try:
+			command.run()
+		except:
+			log.exception("Error executing profile trigger")
+		self._pushNextSpeech()
 
 	def cancel(self):
 		getSynth().cancel()
