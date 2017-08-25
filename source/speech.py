@@ -2025,7 +2025,7 @@ class SpeechManager(object):
 		push = not self._processedSequences
 		self._queueSpeechSequence(speechSequence)
 		if push:
-			self._pushNextSpeech()
+			self._pushNextSpeech(True)
 
 	def _queueSpeechSequence(self, inSeq):
 		outSeq = []
@@ -2035,7 +2035,8 @@ class SpeechManager(object):
 					continue
 				# All sequences after a profile switch must be processed
 				# after the switch actually occurs. Therefore, split here.
-				self._unprocessedSequences.append(outSeq)
+				if outSeq:
+					self._unprocessedSequences.append(outSeq)
 				self._unprocessedSequences.append(command)
 				outSeq = []
 			else:
@@ -2045,12 +2046,8 @@ class SpeechManager(object):
 
 	def _processNextSequence(self):
 		if not self._unprocessedSequences:
-			return False
-		inSeq = self._unprocessedSequences[0]
-		if isinstance(inSeq, ConfigProfileTriggerCommand):
-			# _onSynthDoneSpeaking will handle the profile switch.
-			return False
-		del self._unprocessedSequences[0]
+			return
+		inSeq = self._unprocessedSequences.pop(0)
 		outSeq = []
 		inSeq = self._compatProcessInput(inSeq)
 		for command in inSeq:
@@ -2097,13 +2094,17 @@ class SpeechManager(object):
 				outSeq.append(IndexCommand(speechIndex))
 			outSeq.append(EndUtteranceCommand())
 			self._processedSequences.append(outSeq)
-		return True
 
-	def _pushNextSpeech(self):
+	def _pushNextSpeech(self, initial):
 		if not self._processedSequences:
-			shouldSpeak = self._processNextSequence()
-			if not shouldSpeak:
-				return
+			if self._unprocessedSequences and isinstance(self._unprocessedSequences[0], ConfigProfileTriggerCommand):
+				if initial:
+					self._switchProfile()
+				else:
+					# Wait for the synth to finish speaking.
+					# _handleDoneSpeaking will trigger the profile switch.
+					return
+			self._processNextSequence()
 		seq = self._buildNextUtterance()
 		if seq:
 			synth = getSynth()
@@ -2169,25 +2170,29 @@ class SpeechManager(object):
 			except:
 				log.exception("Error running speech callback")
 		if endOfUtterance:
-			self._pushNextSpeech()
+			self._pushNextSpeech(False)
 
 	def _onSynthDoneSpeaking(self, synth=None):
 		if synth != getSynth():
 			return
+		# This needs to be handled in the main thread.
+		queueHandler.queueFunction(queueHandler.eventQueue, self._handleDoneSpeaking)
+
+	def _handleDoneSpeaking(self):
+		if self._processedSequences:
+			# A new utterance has already been pushed.
+			return
 		if self._unprocessedSequences and isinstance(self._unprocessedSequences[0], ConfigProfileTriggerCommand):
-			queueHandler.queueFunction(queueHandler.eventQueue, self._switchProfile)
+			self._switchProfile()
+			self._pushNextSpeech(False)
 
 	def _switchProfile(self):
-		if self._processedSequences:
-			# This must have been a synthDoneSpeaking notification from an earlier utterance.
-			return
 		command = self._unprocessedSequences.pop(0)
 		assert isinstance(command, ConfigProfileTriggerCommand), "First unprocessed command should be a ConfigProfileTriggerCommand"
 		try:
 			command.run()
 		except:
 			log.exception("Error executing profile trigger")
-		self._pushNextSpeech()
 
 	def cancel(self):
 		getSynth().cancel()
