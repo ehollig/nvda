@@ -2097,7 +2097,8 @@ class SpeechManager(object):
 
 	def _pushNextSpeech(self, initial):
 		if not self._processedSequences:
-			self._compatMaybeFakeDoneSpeaking()
+			if not initial:
+				self._compatMaybeFakeDoneSpeaking()
 			if self._unprocessedSequences and isinstance(self._unprocessedSequences[0], ConfigProfileTriggerCommand):
 				if initial:
 					self._switchProfile()
@@ -2274,7 +2275,7 @@ class SpeechManager(object):
 			"SynthDriver.lastIndex is deprecated. Use synthIndexReached notifications instead."))
 		# Import late so speech loads as fast as possible at startup.
 		import wx
-		self._compatLastSynthIndex = None
+		self._compatLastSynthIndex = synth.lastIndex
 		self._compatPollIndexTimer = wx.PyTimer(self._compatPollIndex)
 		self._compatPollIndexTimer.Start(self.COMPAT_POLL_INDEX_INTERVAL)
 		log.debug("Started compat index polling")
@@ -2298,7 +2299,7 @@ class SpeechManager(object):
 		"""
 		synth = getSynth()
 		index = synth.lastIndex
-		if index != self._compatLastSynthIndex:
+		if index is not None and index != self._compatLastSynthIndex:
 			synthDriverHandler.synthIndexReached.notify(synth=synth, index=index)
 			self._compatLastSynthIndex = index
 
