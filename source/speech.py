@@ -2311,6 +2311,8 @@ class SpeechManager(object):
 		synth = getSynth()
 		if synthDriverHandler.synthDoneSpeaking in synth.supportedNotifications:
 			return # Synth supports done speaking notifications itself.
+		warnings.warn(DeprecationWarning(
+			"Synthdoesn't provide synthDoneSpeaking notifications, but it should."))
 		# Import late so speech loads as fast as possible at startup.
 		import wx
 		wx.CallLater(self.COMPAT_FAKE_DONE_SPEAKING_DELAY, synthDriverHandler.synthDoneSpeaking.notify, synth=synth)
