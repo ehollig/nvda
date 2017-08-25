@@ -1977,6 +1977,42 @@ class SpeechManager(object):
 	"""Manages queuing of speech utterances, calling callbacks at desired points in the speech, etc.
 	This is intended for internal use only.
 	It is used by higher level functions such as L{speak}.
+
+	The high level flow of control is as follows:
+	1. A speech sequence is queued with L{speak}.
+	2. L{_queueSpeechSequence} splits the input sequence at profile switches.
+		This is necessary because some processing relies on settings which might change when the profile is switched;
+		e.g. information about the synthesizer.
+		These sequences are considered to be "unprocessed" (and are placed in L{_unprocessedSequences}).
+	3. L{_pushNextSpeech} is called to begin pushing speech.
+	4. If the input begins with a profile switch, it is applied immediately.
+	5. There are not yet any processed sequences, so L{_processNextSequence} is called to process the first unprocessed sequence.
+	6. L{_processnextSequence} converts callbacks to indexes, etc.
+		All indexing is assigned and managed by this class.
+		It maps any indexes to their corresponding callbacks.
+		It splits the sequence at indexes so we easily know what has completed speaking.
+		If there are end utterance commands, the sequence is split at that point.
+		There is always an index at the end of utterances so we know when they've finished speaking.
+		These processed sequences are placed in L{_processedSequences}.
+	7. L{_buildNextUtterance} is called to build a full utterance and it is sent to the synth.
+	8. For every index reached, L{_handleIndex} is called.
+		The completed sequence is removed from L{_processedSequences}.
+		If there is an associated callback, it is run.
+		If the index marks the end of an utterance, L{_pushNextSpeech} is called to push more speech.
+	9. If there is another processed utterance before a profile switch, it is built and sent as per steps 7 and 8.
+	10. In L{_pushNextSpeech}, if a profile switch is next, we wait for the synth to finish speaking before pushing more.
+		This is because we don't want to start speaking too early with a different synth.
+		L{_handleDoneSpeaking} is called when the synth finishes speaking and it applies the profile switch.
+	11. The next unprocessed sequence is processed as per step 6.
+		The flow then repeats from step 7 onwards.
+	12. If another sequence is queued via L{speak} during speech, it is queued as an unprocessed sequence as per step 2.
+		It is then handled by L{_pushNextSpeech} in step 11.
+
+	Notes:
+	1. All of this activity is (and must be) synchronized and serialized on the main thread.
+	2. There is quite a bit of backwards compatibility code to handle caller use of L{IndexCommand},
+		lack of support for commands and notifications in synth drivers, etc.
+		All of these methods are named with a C{_compat} prefix.
 	"""
 
 	def __init__(self):
