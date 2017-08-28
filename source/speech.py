@@ -2289,7 +2289,7 @@ class SpeechManager(object):
 
 	def _compatMakeFakeIndexCallback(self, index):
 		def run():
-			self.lastFakeIndex = index
+			self.compatLastFakeIndex = index
 		return run
 
 	def _compatMakeSetPitchCallback(self, synth, command):
