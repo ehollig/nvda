@@ -2143,11 +2143,11 @@ class SpeechManager(object):
 					# _handleDoneSpeaking will trigger the profile switch.
 					return
 			self._processNextSequence()
-		seq = self._buildNextUtterance()
-		if seq:
+		if self._processedSequences:
 			synth = getSynth()
 			shouldSpeak = self._compatMaybeStartPollIndex(synth)
 			if shouldSpeak:
+				seq = self._buildNextUtterance()
 				synth.speak(seq)
 		else:
 			self._compatMaybeStopPollIndex()
@@ -2315,12 +2315,14 @@ class SpeechManager(object):
 		self._compatPollIndexTimer = wx.PyTimer(self._compatPollIndex)
 		self._compatPollIndexTimer.Start(self.COMPAT_POLL_INDEX_INTERVAL)
 		log.debug("Started compat index polling")
-		firstCommand = self._processedSequences[0][0] if self._processedSequences else None
-		if isinstance(firstCommand, IndexCommand):
+		firstSeq = self._processedSequences[0] if self._processedSequences else None
+		if firstSeq and isinstance(firstSeq[0], IndexCommand):
 			# We start with an index, so fire it right away to avoid an initial delay.
-			self._handleIndex(firstCommand.index)
-			# _handleIndex tweaks the queue and pushes speech, so our caller shouldn't speak.
-			return False
+			self._handleIndex(firstSeq[0].index)
+			if len(firstSeq) > 1 and isinstance(firstSeq[1], EndUtteranceCommand):
+				# Because this is the end of an utterance,
+				# _handleIndex tweaked the queue and pushes speech, so our caller shouldn't speak.
+				return False
 		return True
 
 	def _compatMaybeStopPollIndex(self):
