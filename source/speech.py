@@ -2260,6 +2260,7 @@ class SpeechManager(object):
 			# We assume support for certain commands in this case for backwards compatibility.
 			supportedCommands = self.COMPAT_ASSUMED_SUPPORTED_COMMANDS
 		pitchNeedsReset = False
+		command = None
 		for command in inSeq:
 			if isinstance(command, IndexCommand):
 				# We want to control index numbering,
@@ -2286,6 +2287,10 @@ class SpeechManager(object):
 			command = CallbackCommand(self._compatMakeSetPitchCallback(synth, PitchCommand()))
 			command.runOnCancel = True
 			yield command
+		if synthDriverHandler.synthDoneSpeaking not in synth.supportedNotifications:
+			yield EndUtteranceCommand()
+			speechIndex = next(self._indexCounter)
+			yield IndexCommand(speechIndex)
 
 	def _compatMakeFakeIndexCallback(self, index):
 		def run():
@@ -2341,11 +2346,13 @@ class SpeechManager(object):
 			synthDriverHandler.synthIndexReached.notify(synth=synth, index=index)
 			self._compatLastSynthIndex = index
 
-	COMPAT_FAKE_DONE_SPEAKING_DELAY = 500
+	COMPAT_FAKE_DONE_SPEAKING_DELAY = 0
 	def _compatMaybeFakeDoneSpeaking(self):
 		"""Backwards compatibility for synths which support indexing but don't notify when they're done speaking.
-		This runs after the index at the end of the utterance
+		For these synths, L{_compatProcessInput} inserts an extra utterance with just an index.
+		This method runs after the index at the end of that utterance
 		and fires a done speaking notification after a short delay.
+		The delay compensates for synths which fire the index sooner than they should.
 		"""
 		synth = getSynth()
 		if synthDriverHandler.synthDoneSpeaking in synth.supportedNotifications:
