@@ -102,11 +102,7 @@ def cancelSpeech():
 	elif speechMode==speechMode_beeps:
 		return
 	synth = getSynth()
-	if synthDriverHandler.synthIndexReached in synth.supportedNotifications:
-		_manager.cancel()
-	else:
-		log.debugWarning("Compat: Calling synth.cancel directly instead of using SpeechManager ")
-		synth.cancel()
+	_manager.cancel()
 	beenCanceled=True
 	isPaused=False
 
@@ -116,14 +112,12 @@ def pauseSpeech(switch):
 	isPaused=switch
 	beenCanceled=False
 
-def speakMessage(text,index=None):
+def speakMessage(text):
 	"""Speaks a given message.
 @param text: the message to speak
 @type text: string
-@param index: the index to mark this current text with, its best to use the character position of the text if you know it 
-@type index: int
 """
-	speakText(text,index=index,reason=controlTypes.REASON_MESSAGE)
+	speakText(text,reason=controlTypes.REASON_MESSAGE)
 
 def getCurrentLanguage():
 	try:
@@ -239,7 +233,7 @@ def getCharDescListFromText(text,locale):
 			i = i - 1
 	return charDescList
 
-def speakObjectProperties(obj,reason=controlTypes.REASON_QUERY,index=None,**allowedProperties):
+def speakObjectProperties(obj,reason=controlTypes.REASON_QUERY,_index=None,**allowedProperties):
 	#Fetch the values for all wanted properties
 	newPropertyValues={}
 	positionInfo=None
@@ -296,7 +290,7 @@ def speakObjectProperties(obj,reason=controlTypes.REASON_QUERY,index=None,**allo
 	#Get the speech text for the properties we want to speak, and then speak it
 	text=getSpeechTextForProperties(reason,**newPropertyValues)
 	if text:
-		speakText(text,index=index)
+		speakText(text,_index=_index)
 
 def _speakPlaceholderIfEmpty(info, obj, reason):
 	""" attempt to speak placeholder attribute if the textInfo 'info' is empty
@@ -309,7 +303,7 @@ def _speakPlaceholderIfEmpty(info, obj, reason):
 		return True
 	return False
 
-def speakObject(obj,reason=controlTypes.REASON_QUERY,index=None):
+def speakObject(obj,reason=controlTypes.REASON_QUERY,_index=None):
 	from NVDAObjects import NVDAObjectTextInfo
 	role=obj.role
 	# Choose when we should report the content of this object's textInfo, rather than just the object's value
@@ -358,7 +352,7 @@ def speakObject(obj,reason=controlTypes.REASON_QUERY,index=None):
 	if shouldReportTextContent:
 		allowProperties['value']=False
 
-	speakObjectProperties(obj,reason=reason,index=index,**allowProperties)
+	speakObjectProperties(obj,reason=reason,_index=_index,**allowProperties)
 	if reason==controlTypes.REASON_ONLYCACHE:
 		return
 	if shouldReportTextContent:
@@ -385,18 +379,17 @@ def speakObject(obj,reason=controlTypes.REASON_QUERY,index=None):
 			except (NotImplementedError, LookupError):
 				pass
 
-def speakText(text,index=None,reason=controlTypes.REASON_MESSAGE,symbolLevel=None):
+def speakText(text,_index=None,reason=controlTypes.REASON_MESSAGE,symbolLevel=None):
 	"""Speaks some text.
 	@param text: The text to speak.
 	@type text: str
-	@param index: The index to mark this text with, which can be used later to determine whether this piece of text has been spoken.
-	@type index: int
+	@param _index: For internal use only.
 	@param reason: The reason for this speech; one of the controlTypes.REASON_* constants.
 	@param symbolLevel: The symbol verbosity level; C{None} (default) to use the user's configuration.
 	"""
 	speechSequence=[]
-	if index is not None:
-		speechSequence.append(IndexCommand(index))
+	if _index is not None:
+		speechSequence.append(IndexCommand(_index))
 	if text is not None:
 		if isBlank(text):
 			# Translators: This is spoken when the line is considered blank.
@@ -716,7 +709,7 @@ def _speakTextInfo_addMath(speechSequence, info, field):
 	except (NotImplementedError, LookupError):
 		return
 
-def speakTextInfo(info,useCache=True,formatConfig=None,unit=None,reason=controlTypes.REASON_QUERY,index=None,onlyInitialFields=False,suppressBlanks=False):
+def speakTextInfo(info,useCache=True,formatConfig=None,unit=None,reason=controlTypes.REASON_QUERY,_index=None,onlyInitialFields=False,suppressBlanks=False):
 	onlyCache=reason==controlTypes.REASON_ONLYCACHE
 	if isinstance(useCache,SpeakTextInfoState):
 		speakTextInfoState=useCache
@@ -808,8 +801,8 @@ def speakTextInfo(info,useCache=True,formatConfig=None,unit=None,reason=controlT
 	isTextBlank=True
 
 	# Even when there's no speakable text, we still need to notify the synth of the index.
-	if index is not None:
-		speechSequence.append(IndexCommand(index))
+	if _index is not None:
+		speechSequence.append(IndexCommand(_index))
 
 	#Get speech text for any fields that are in both controlFieldStacks, if extra detail is not requested
 	if not extraDetail:

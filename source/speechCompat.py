@@ -7,6 +7,7 @@
 """Speech code to support old synthesizers which don't support index and done speaking notifications, etc.
 """
 
+import itertools
 import speech
 from synthDriverHandler import getSynth
 import tones
@@ -14,12 +15,12 @@ import queueHandler
 import config
 import characterProcessing
 from logHandler import log
+import textInfos
+import api
+import controlTypes
+import sayAllHandler
 
 def getLastSpeechIndex():
-	"""Gets the last index passed by the synthesizer. Indexing is used so that its possible to find out when a certain peace of text has been spoken yet. Usually the character position of the text is passed to speak functions as the index.
-@returns: the last index encountered
-@rtype: int
-"""
 	return getSynth().lastIndex
 
 _speakSpellingGenerator=None
@@ -108,3 +109,157 @@ def _speakSpellingGen(text,locale,useCharacterDescriptions):
 				tones.beep(2000,50)
 		args=yield
 		if args: buf.append(args)
+
+_sayAll_generatorID = None
+
+def _sayAll_startGenerator(generator):
+	global _sayAll_generatorID
+	sayAll_stop()
+	_sayAll_generatorID = queueHandler.registerGeneratorObject(generator)
+
+def sayAll_stop():
+	global _sayAll_generatorID
+	if _sayAll_generatorID is None:
+		return
+	queueHandler.cancelGeneratorObject(_sayAll_generatorID)
+	_sayAll_generatorID = None
+
+def sayAll_isRunning():
+	return _sayAll_generatorID is not None
+
+def sayAll_readObjects(obj):
+	_startGenerator(sayAll_readObjectsHelper_generator(obj))
+
+def sayAll_generateObjectSubtreeSpeech(obj,indexGen):
+	index=indexGen.next()
+	speech.speakObject(obj,reason=controlTypes.REASON_SAYALL,_index=index)
+	yield obj,index
+	child=obj.simpleFirstChild
+	while child:
+		childSpeech=sayAll_generateObjectSubtreeSpeech(child,indexGen)
+		for r in childSpeech:
+			yield r
+		child=child.simpleNext
+
+def sayAll_readObjectsHelper_generator(obj):
+	lastSentIndex=0
+	lastReceivedIndex=0
+	speechGen=sayAll_generateObjectSubtreeSpeech(obj,itertools.count())
+	objIndexMap={}
+	keepReading=True
+	while True:
+		# lastReceivedIndex might be None if other speech was interspersed with this say all.
+		# In this case, we want to send more text in case this was the last chunk spoken.
+		if lastReceivedIndex is None or (lastSentIndex-lastReceivedIndex)<=1:
+			if keepReading:
+				try:
+					o,lastSentIndex=speechGen.next()
+				except StopIteration:
+					keepReading=False
+					continue
+				objIndexMap[lastSentIndex]=o
+		receivedIndex=getLastSpeechIndex()
+		if receivedIndex!=lastReceivedIndex and (lastReceivedIndex!=0 or receivedIndex!=None): 
+			lastReceivedIndex=receivedIndex
+			lastReceivedObj=objIndexMap.get(lastReceivedIndex)
+			if lastReceivedObj is not None:
+				api.setNavigatorObject(lastReceivedObj)
+			#Clear old objects from the map
+			for i in objIndexMap.keys():
+				if i<=lastReceivedIndex:
+					del objIndexMap[i]
+		while speech.isPaused:
+			yield
+		yield
+
+def sayAll_readText(cursor):
+	_sayAll_startGenerator(sayAll_readTextHelper_generator(cursor))
+
+def sayAll_readTextHelper_generator(cursor):
+	if cursor==sayAllHandler.CURSOR_CARET:
+		try:
+			reader=api.getCaretObject().makeTextInfo(textInfos.POSITION_CARET)
+		except (NotImplementedError, RuntimeError):
+			return
+	else:
+		reader=api.getReviewPosition()
+
+	lastSentIndex=0
+	lastReceivedIndex=0
+	cursorIndexMap={}
+	keepReading=True
+	speakTextInfoState=speech.SpeakTextInfoState(reader.obj)
+	with sayAllHandler.SayAllProfileTrigger():
+		while True:
+			if not reader.obj:
+				# The object died, so we should too.
+				return
+			# lastReceivedIndex might be None if other speech was interspersed with this say all.
+			# In this case, we want to send more text in case this was the last chunk spoken.
+			if lastReceivedIndex is None or (lastSentIndex-lastReceivedIndex)<=10:
+				if keepReading:
+					bookmark=reader.bookmark
+					index=lastSentIndex+1
+					delta=reader.move(textInfos.UNIT_READINGCHUNK,1,endPoint="end")
+					if delta<=0:
+						speech.speakWithoutPauses(None)
+						keepReading=False
+						continue
+					speech.speakTextInfo(reader,unit=textInfos.UNIT_READINGCHUNK,reason=controlTypes.REASON_SAYALL,_index=index,useCache=speakTextInfoState)
+					lastSentIndex=index
+					cursorIndexMap[index]=(bookmark,speakTextInfoState.copy())
+					try:
+						reader.collapse(end=True)
+					except RuntimeError: #MS Word when range covers end of document
+						# Word specific: without this exception to indicate that further collapsing is not posible, say-all could enter an infinite loop.
+						speech.speakWithoutPauses(None)
+						keepReading=False
+			else:
+				# We'll wait for speech to catch up a bit before sending more text.
+				if speech.speakWithoutPauses.lastSentIndex is None or (lastSentIndex-speech.speakWithoutPauses.lastSentIndex)>=10:
+					# There is a large chunk of pending speech
+					# Force speakWithoutPauses to send text to the synth so we can move on.
+					speech.speakWithoutPauses(None)
+			receivedIndex=getLastSpeechIndex()
+			if receivedIndex!=lastReceivedIndex and (lastReceivedIndex!=0 or receivedIndex!=None): 
+				lastReceivedIndex=receivedIndex
+				bookmark,state=cursorIndexMap.get(receivedIndex,(None,None))
+				if state:
+					state.updateObj()
+				if bookmark is not None:
+					updater=reader.obj.makeTextInfo(bookmark)
+					if cursor==sayAllHandler.CURSOR_CARET:
+						updater.updateCaret()
+					if cursor!=sayAllHandler.CURSOR_CARET or config.conf["reviewCursor"]["followCaret"]:
+						api.setReviewPosition(updater)
+			elif not keepReading and lastReceivedIndex==lastSentIndex:
+				# All text has been sent to the synth.
+				# Turn the page and start again if the object supports it.
+				if isinstance(reader.obj,textInfos.DocumentWithPageTurns):
+					try:
+						reader.obj.turnPage()
+					except RuntimeError:
+						break
+					else:
+						reader=reader.obj.makeTextInfo(textInfos.POSITION_FIRST)
+						keepReading=True
+				else:
+					break
+
+			while speech.isPaused:
+				yield
+			yield
+
+		# Wait until the synth has actually finished speaking.
+		# Otherwise, if there is a triggered profile with a different synth,
+		# we will switch too early and truncate speech (even up to several lines).
+		# Send another index and wait for it.
+		index=lastSentIndex+1
+		speech.speak([speech.IndexCommand(index)])
+		while getLastSpeechIndex()<index:
+			yield
+			yield
+		# Some synths say they've handled the index slightly sooner than they actually have,
+		# so wait a bit longer.
+		for i in xrange(30):
+			yield
