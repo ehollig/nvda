@@ -146,6 +146,13 @@ def spellTextInfo(info,useCharacterDescriptions=False):
 _speakSpellingGenerator=None
 
 def speakSpelling(text, locale=None, useCharacterDescriptions=False):
+	if synthDriverHandler.synthIndexReached not in getSynth().supportedNotifications:
+		warnings.warn(DeprecationWarning(
+			"SynthDriver.lastIndex is deprecated. Notify using synthIndexReached instead."))
+		log.debugWarning("Using speechCompat.speakSpelling")
+		# Import late to avoid circular import.
+		import speechCompat
+		return speechCompat.speakSpelling(text, locale=locale, useCharacterDescriptions=useCharacterDescriptions)
 	seq = list(getSpeechForSpelling(text, locale=locale, useCharacterDescriptions=useCharacterDescriptions))
 	speak(seq)
 
