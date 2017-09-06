@@ -81,11 +81,9 @@ def processText(locale,text,symbolLevel):
 	return text.strip()
 
 def getLastSpeechIndex():
-	"""Gets the last index passed by the synthesizer. Indexing is used so that its possible to find out when a certain peace of text has been spoken yet. Usually the character position of the text is passed to speak functions as the index.
-@returns: the last index encountered
-@rtype: int
-"""
-	return _manager.compatLastFakeIndex
+	"""@deprecated: Use L{CallbackCommand} (or one of the other subclasses of L{BaseCallbackCommand}) instead.
+	"""
+	return None
 
 def cancelSpeech():
 	"""Interupts the synthesizer from currently speaking"""
@@ -2015,18 +2013,13 @@ class SpeechManager(object):
 	12. If another sequence is queued via L{speak} during speech, it is queued as an unprocessed sequence as per step 2.
 		It is then handled by L{_pushNextSpeech} in step 11.
 
-	Notes:
-	1. All of this activity is (and must be) synchronized and serialized on the main thread.
-	2. There is quite a bit of backwards compatibility code to handle caller use of L{IndexCommand},
-		lack of support for commands and notifications in synth drivers, etc.
-		All of these methods are named with a C{_compat} prefix.
+	Note:
+	All of this activity is (and must be) synchronized and serialized on the main thread.
 	"""
 
 	def __init__(self):
 		#: A counter for indexes sent to the synthesizer for callbacks, etc.
 		self._indexCounter = self._generateIndexes()
-		#: A timer to poll for indexes for synths which don't support synthIndexReached notifications.
-		self._compatPollIndexTimer = None
 		self._reset()
 		synthDriverHandler.synthIndexReached.register(self._onSynthIndexReached)
 		synthDriverHandler.synthDoneSpeaking.register(self._onSynthDoneSpeaking)
@@ -2060,8 +2053,6 @@ class SpeechManager(object):
 		self._processedSequences = []
 		#: Maps indexes to BaseCallbackCommands.
 		self._indexesToCallbacks = {}
-		#: Used for backwards compatibility when the input contains an IndexCommand.
-		self.compatLastFakeIndex = None
 
 	def speak(self, speechSequence):
 		# If there was nothing queued already, we need to push the first speech.
@@ -2092,7 +2083,6 @@ class SpeechManager(object):
 			return
 		inSeq = self._unprocessedSequences.pop(0)
 		outSeq = []
-		inSeq = self._compatProcessInput(inSeq)
 		for command in inSeq:
 			splitSeq = False
 			if isinstance(command, BaseCallbackCommand):
@@ -2140,8 +2130,6 @@ class SpeechManager(object):
 
 	def _pushNextSpeech(self, initial):
 		if not self._processedSequences:
-			if not initial:
-				self._compatMaybeFakeDoneSpeaking()
 			if self._unprocessedSequences and isinstance(self._unprocessedSequences[0], ConfigProfileTriggerCommand):
 				if initial:
 					self._switchProfile()
@@ -2150,14 +2138,9 @@ class SpeechManager(object):
 					# _handleDoneSpeaking will trigger the profile switch.
 					return
 			self._processNextSequence()
-		if self._processedSequences:
-			synth = getSynth()
-			shouldSpeak = self._compatMaybeStartPollIndex(synth)
-			if shouldSpeak:
-				seq = self._buildNextUtterance()
-				synth.speak(seq)
-		else:
-			self._compatMaybeStopPollIndex()
+		seq = self._buildNextUtterance()
+		if seq:
+			getSynth().speak(seq)
 
 	def _buildNextUtterance(self):
 		"""Since an utterance might be split over several sequences,
@@ -2254,121 +2237,6 @@ class SpeechManager(object):
 					except:
 						log.exception("Error running speech callback on cancel")
 		self._reset()
-		self._compatMaybeStopPollIndex()
-
-	COMPAT_ASSUMED_SUPPORTED_COMMANDS = (IndexCommand, CharacterModeCommand, LangChangeCommand)
-	def _compatProcessInput(self, inSeq):
-		"""Backwards compatibility processing of input speech sequences.
-		"""
-		synth = getSynth()
-		supportedCommands = synth.supportedCommands
-		if not supportedCommands:
-			# This is an old driver which doesn't declare supported commands.
-			# We assume support for certain commands in this case for backwards compatibility.
-			supportedCommands = self.COMPAT_ASSUMED_SUPPORTED_COMMANDS
-		pitchNeedsReset = False
-		command = None
-		for command in inSeq:
-			if isinstance(command, IndexCommand):
-				# We want to control index numbering,
-				# but some callers may still pass IndexCommands.
-				# We want the old speech.getLastSpeechIndex() API to return this fake index.
-				yield CallbackCommand(self._compatMakeFakeIndexCallback(command.index))
-			elif isinstance(command, PitchCommand) and PitchCommand not in supportedCommands:
-				# Backwards compat for raise pitch for capitals.
-				warnings.warn(DeprecationWarning(
-					"Tweaking pitch setting for inline pitch changes is deprecated. Synths should support PitchCommand."))
-				pitchNeedsReset = not command.isBase
-				yield CallbackCommand(self._compatMakeSetPitchCallback(synth, command))
-				yield EndUtteranceCommand()
-			elif isinstance(command, BreakCommand) and BreakCommand not in supportedCommands:
-				warnings.warn(RuntimeWarning(
-					"BreakCommand not supported. Replacing with EndUtteranceCommand."))
-				yield EndUtteranceCommand()
-			elif isinstance(command, SynthCommand) and type(command) not in supportedCommands:
-				log.debugWarning("Synth does not support %r" % command)
-				continue
-			else:
-				yield command
-		if pitchNeedsReset:
-			command = CallbackCommand(self._compatMakeSetPitchCallback(synth, PitchCommand()))
-			command.runOnCancel = True
-			yield command
-		if synthDriverHandler.synthDoneSpeaking not in synth.supportedNotifications:
-			yield EndUtteranceCommand()
-			speechIndex = next(self._indexCounter)
-			yield IndexCommand(speechIndex)
-
-	def _compatMakeFakeIndexCallback(self, index):
-		def run():
-			self.compatLastFakeIndex = index
-		return run
-
-	def _compatMakeSetPitchCallback(self, synth, command):
-		def run():
-			val = command.newValue
-			log.debug("Setting pitch to %d" % val)
-			synth.pitch = val
-		return run
-
-	COMPAT_POLL_INDEX_INTERVAL = 30
-	def _compatMaybeStartPollIndex(self, synth):
-		"""Returns True if _pushNextSpeech should speak, False otherwise.
-		"""
-		if self._compatPollIndexTimer:
-			return True # Already started.
-		if synthDriverHandler.synthIndexReached in synth.supportedNotifications:
-			return True # Synth supports index notifications itself.
-		warnings.warn(DeprecationWarning(
-			"SynthDriver.lastIndex is deprecated. Use synthIndexReached notifications instead."))
-		# Import late so speech loads as fast as possible at startup.
-		import wx
-		self._compatLastSynthIndex = synth.lastIndex
-		self._compatPollIndexTimer = wx.PyTimer(self._compatPollIndex)
-		self._compatPollIndexTimer.Start(self.COMPAT_POLL_INDEX_INTERVAL)
-		log.debug("Started compat index polling")
-		firstSeq = self._processedSequences[0] if self._processedSequences else None
-		if firstSeq and isinstance(firstSeq[0], IndexCommand):
-			# We start with an index, so fire it right away to avoid an initial delay.
-			self._handleIndex(firstSeq[0].index)
-			if len(firstSeq) > 1 and isinstance(firstSeq[1], EndUtteranceCommand):
-				# Because this is the end of an utterance,
-				# _handleIndex tweaked the queue and pushes speech, so our caller shouldn't speak.
-				return False
-		return True
-
-	def _compatMaybeStopPollIndex(self):
-		if self._compatPollIndexTimer:
-			self._compatPollIndexTimer.Stop()
-			self._compatPollIndexTimer = None
-			log.debug("Stopped compat index polling")
-
-	def _compatPollIndex(self):
-		"""Backwards compatibility for synths which support indexing but don't notify about it.
-		This method regularly polls the synth's lastIndex attribute and fires a notification if it changes.
-		"""
-		synth = getSynth()
-		index = synth.lastIndex
-		if index is not None and index != self._compatLastSynthIndex:
-			synthDriverHandler.synthIndexReached.notify(synth=synth, index=index)
-			self._compatLastSynthIndex = index
-
-	COMPAT_FAKE_DONE_SPEAKING_DELAY = 0
-	def _compatMaybeFakeDoneSpeaking(self):
-		"""Backwards compatibility for synths which support indexing but don't notify when they're done speaking.
-		For these synths, L{_compatProcessInput} inserts an extra utterance with just an index.
-		This method runs after the index at the end of that utterance
-		and fires a done speaking notification after a short delay.
-		The delay compensates for synths which fire the index sooner than they should.
-		"""
-		synth = getSynth()
-		if synthDriverHandler.synthDoneSpeaking in synth.supportedNotifications:
-			return # Synth supports done speaking notifications itself.
-		warnings.warn(DeprecationWarning(
-			"Synthdoesn't provide synthDoneSpeaking notifications, but it should."))
-		# Import late so speech loads as fast as possible at startup.
-		import wx
-		wx.CallLater(self.COMPAT_FAKE_DONE_SPEAKING_DELAY, synthDriverHandler.synthDoneSpeaking.notify, synth=synth)
 
 #: The singleton SpeechManager instance used for speech functions.
 #: @type: L{SpeechManager}
