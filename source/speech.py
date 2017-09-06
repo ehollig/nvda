@@ -92,7 +92,7 @@ def cancelSpeech():
 	import sayAllHandler
 	sayAllHandler.stop()
 	speakWithoutPauses._pendingSpeechSequence=[]
-	speakWithoutPauses.lastSentIndex=None
+	speakWithoutPauses._lastSentIndex=None
 	if _speakSpellingGenerator:
 		_speakSpellingGenerator.close()
 	if beenCanceled:
@@ -714,7 +714,7 @@ def speakTextInfo(info,useCache=True,formatConfig=None,unit=None,reason=controlT
 	if isinstance(useCache,SpeakTextInfoState):
 		speakTextInfoState=useCache
 	elif useCache:
-		 speakTextInfoState=SpeakTextInfoState(info.obj)
+		speakTextInfoState=SpeakTextInfoState(info.obj)
 	else:
 		speakTextInfoState=None
 	autoLanguageSwitching=config.conf['speech']['autoLanguageSwitching']
@@ -796,7 +796,7 @@ def speakTextInfo(info,useCache=True,formatConfig=None,unit=None,reason=controlT
 			if not endingBlock and reason==controlTypes.REASON_SAYALL:
 				endingBlock=bool(int(controlFieldStackCache[count].get('isBlock',0)))
 		if endingBlock:
-			speechSequence.append(SpeakWithoutPausesBreakCommand())
+			speechSequence.append(EndUtteranceCommand())
 	# The TextInfo should be considered blank if we are only exiting fields (i.e. we aren't entering any new fields and there is no text).
 	isTextBlank=True
 
@@ -1634,13 +1634,16 @@ re_last_pause=re.compile(ur"^(.*(?<=[^\s.!?])[.!?][\"'”’)]?(?:\s+|$))(.*$)",
 def speakWithoutPauses(speechSequence,detectBreaks=True):
 	"""
 	Speaks the speech sequences given over multiple calls, only sending to the synth at acceptable phrase or sentence boundaries, or when given None for the speech sequence.
+	@return: C{True} if something was actually spoken,
+		C{False} if only buffering occurred.
+	@rtype: bool
 	"""
 	lastStartIndex=0
 	#Break on all explicit break commands
 	if detectBreaks and speechSequence:
 		sequenceLen=len(speechSequence)
 		for index in xrange(sequenceLen):
-			if isinstance(speechSequence[index],SpeakWithoutPausesBreakCommand):
+			if isinstance(speechSequence[index],EndUtteranceCommand):
 				if index>0 and lastStartIndex<index:
 					speakWithoutPauses(speechSequence[lastStartIndex:index],detectBreaks=False)
 				speakWithoutPauses(None)
@@ -1687,16 +1690,19 @@ def speakWithoutPauses(speechSequence,detectBreaks=True):
 		if pendingSpeechSequence:
 			pendingSpeechSequence.reverse()
 			speakWithoutPauses._pendingSpeechSequence.extend(pendingSpeechSequence)
-	#Scan the final speech sequence backwards
-	for item in reversed(finalSpeechSequence):
-		if isinstance(item,IndexCommand):
-			speakWithoutPauses.lastSentIndex=item.index
-			break
+	if synthDriverHandler.synthIndexReached not in getSynth().supportedNotifications:
+		# Compat code to support speechCompat.sayAll_readText.
+		#Scan the final speech sequence backwards
+		for item in reversed(finalSpeechSequence):
+			if isinstance(item,IndexCommand):
+				speakWithoutPauses._lastSentIndex=item.index
+				break
 	if finalSpeechSequence:
 		speak(finalSpeechSequence)
-speakWithoutPauses.lastSentIndex=None
+		return True
+	return False
+speakWithoutPauses._lastSentIndex=None # For speechCompat.sayAll_readText
 speakWithoutPauses._pendingSpeechSequence=[]
-
 
 class SpeechCommand(object):
 	"""The base class for objects that can be inserted between strings of text to perform actions, change voice parameters, etc.
@@ -1755,12 +1761,6 @@ class LangChangeCommand(SynthCommand):
 
 	def __repr__(self):
 		return "LangChangeCommand (%r)"%self.lang
-
-class SpeakWithoutPausesBreakCommand(SpeechCommand):
-	"""Forces speakWithoutPauses to flush its buffer and therefore break the sentence at this point.
-	This should only be used with the L{speakWithoutPauses} function.
-	This will be removed during processing.
-	"""
 
 class BreakCommand(SynthCommand):
 	"""Insert a break between words.

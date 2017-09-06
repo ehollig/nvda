@@ -216,7 +216,7 @@ def sayAll_readTextHelper_generator(cursor):
 						keepReading=False
 			else:
 				# We'll wait for speech to catch up a bit before sending more text.
-				if speech.speakWithoutPauses.lastSentIndex is None or (lastSentIndex-speech.speakWithoutPauses.lastSentIndex)>=10:
+				if speech.speakWithoutPauses._lastSentIndex is None or (lastSentIndex-speech.speakWithoutPauses._lastSentIndex)>=10:
 					# There is a large chunk of pending speech
 					# Force speakWithoutPauses to send text to the synth so we can move on.
 					speech.speakWithoutPauses(None)
