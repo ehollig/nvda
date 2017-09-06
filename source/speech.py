@@ -101,7 +101,12 @@ def cancelSpeech():
 		return
 	elif speechMode==speechMode_beeps:
 		return
-	_manager.cancel()
+	synth = getSynth()
+	if synthDriverHandler.synthIndexReached in synth.supportedNotifications:
+		_manager.cancel()
+	else:
+		log.debugWarning("Compat: Calling synth.cancel directly instead of using SpeechManager ")
+		synth.cancel()
 	beenCanceled=True
 	isPaused=False
 
@@ -148,8 +153,8 @@ _speakSpellingGenerator=None
 def speakSpelling(text, locale=None, useCharacterDescriptions=False):
 	if synthDriverHandler.synthIndexReached not in getSynth().supportedNotifications:
 		warnings.warn(DeprecationWarning(
-			"SynthDriver.lastIndex is deprecated. Notify using synthIndexReached instead."))
-		log.debugWarning("Using speechCompat.speakSpelling")
+			"SynthDriver.lastIndex is deprecated. Synth should notify using synthIndexReached instead."))
+		log.debugWarning("Compat: Using speechCompat.speakSpelling")
 		# Import late to avoid circular import.
 		import speechCompat
 		return speechCompat.speakSpelling(text, locale=locale, useCharacterDescriptions=useCharacterDescriptions)
@@ -523,6 +528,12 @@ def speak(speechSequence,symbolLevel=None):
 			speechSequence[index]=processText(curLanguage,item,symbolLevel)
 			if not inCharacterMode:
 				speechSequence[index]+=CHUNK_SEPARATOR
+	synth = getSynth()
+	if synthDriverHandler.synthIndexReached not in synth.supportedNotifications:
+		warnings.warn(DeprecationWarning(
+			"SynthDriver.lastIndex is deprecated. Synth should notify using synthIndexReached instead."))
+		log.debugWarning("Compat: Calling synth.speak directly instead of using SpeechManager ")
+		return synth.speak(speechSequence)
 	_manager.speak(speechSequence)
 
 def speakSelectionMessage(message,text):
